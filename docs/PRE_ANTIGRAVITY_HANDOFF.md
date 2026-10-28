@@ -77,3 +77,12 @@ await service.close(); // 진행 중 검사/저장 완료까지 대기한 뒤 DB
 - 재시작 복구 시 큐 작업 ID를 **불변 검사 ID**로 사용한다. 검사 저장만 성공하고 큐 완료 업데이트 전에 브라우저가 닫힌 경우 기존 ID를 조회해 저장된 결과를 확인한 후 **중복 ONNX 추론 및 중복 검사 기록 생성 없이** 큐를 `completed`로 복구한다.
 - 완료된 검사 사진은 검사 원본 저장소에 있으므로 큐의 보조 Blob 참조를 비운다. 실패/중단된 사진은 복구 전까지 큐에 남아 있다. 모델 오류를 이미지 오류나 제품 불량으로 표기하지 않는다.
 - CI/fake-indexeddb 테스트는 브라우저 IndexedDB 계약을 검증할 뿐 **실제 Chrome 종료·복원 UI, 카메라 및 모델 ONNX 실행 성공**을 입증하지 않는다. Antigravity가 연결 후 실제 새로고침·닫기·복구를 검증해야 한다.
+
+## 작업자 최종 판정 및 변경 이력 — ChatGPT 추가 구현 (DB v3)
+
+- `src/storage/humanReviewDb.mjs`, `src/storage/humanReviewModel.mjs`: 기존 AI 검사 기록을 변경하지 않는 **추가형** 작업자 판정 및 변경 이벤트 관리.
+- `openBrowserInspectionService()`에 `recordHumanReview({inspectionId,verdict,operatorName,reason,expectedRevision})`, `latestHumanReview(id)`, `listHumanReviewHistory(id)`, `summarizeHumanReviews({sourceType})` 연결.
+- 판정은 `normal`/`defective`/`reinspection`, 품질 보류 사진은 `reinspection`만 허용. `expectedRevision=0`은 첫 판정, 이후는 최신 판정 이벤트의 `revision`을 사용.
+- 실제 사람의 신원 인증이 아닌 로컬 식별명 기록임을 명시; AI 후보와 작업자 최종 판단을 분리 표시한다. 출고 자동 승인과 물리적 제품 단위 불량률을 생성하지 않는다.
+- DB v2→v3은 스토어만 추가하고 기존 원본·검사·대기열을 유지한다. 사용자 명시적 검사 삭제 시 연관된 판정 감사 이벤트를 같은 트랜잭션에서 삭제한다.
+- 상세 인터페이스와 안전 제한: `docs/HUMAN_REVIEW_AUDIT_CONTRACT.md`.

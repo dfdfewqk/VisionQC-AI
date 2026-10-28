@@ -29,7 +29,8 @@ test('DB v2 adds queue store and leaves v1 source, inspections, and heatmaps unt
   tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error);
  });first.close();
  const current=await openInspectionDatabase({indexedDB,name});
- assert.equal(current.version,2);assert.equal(current.objectStoreNames.contains('inspectionQueue'),true);
+ assert.equal(current.version,3);assert.equal(current.objectStoreNames.contains('inspectionQueue'),true);
+ assert.equal(current.objectStoreNames.contains('humanReviewEvents'),true);
  const saved=await new Promise((resolve,reject)=>{
   const req=current.transaction('sourceImages').objectStore('sourceImages').get('old');
   req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);

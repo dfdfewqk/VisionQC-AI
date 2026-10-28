@@ -3,11 +3,12 @@ import {createInspectionSnapshot} from './inspectionModel.mjs';
 import {findMatchingSourceViews, summarizeInspectionViews, validateReinspection} from './inspectionLineage.mjs';
 
 export const DEFAULT_DB_NAME = 'visionqc-inspections-v1';
-export const DB_VERSION = 2; // additive durable inspection queue; preserves v1 stores
+export const DB_VERSION = 3; // additive human audit store; preserves all v1/v2 records
 const SOURCE_STORE = 'sourceImages';
 const RECORD_STORE = 'inspections';
 const OVERLAY_STORE = 'heatmaps';
 const QUEUE_STORE = 'inspectionQueue';
+const REVIEW_STORE = 'humanReviewEvents';
 const VALID_MIME = new Set(['image/png','image/jpeg','image/webp']);
 
 function errorMessage(error) { return error instanceof Error ? error.message : String(error); }
@@ -44,6 +45,10 @@ export function openInspectionDatabase({indexedDB = globalThis.indexedDB, name =
       }
       if (!db.objectStoreNames.contains(OVERLAY_STORE)) db.createObjectStore(OVERLAY_STORE, {keyPath:'inspectionId'});
       if (!db.objectStoreNames.contains(QUEUE_STORE)) db.createObjectStore(QUEUE_STORE, {keyPath:'id'});
+      if (!db.objectStoreNames.contains(REVIEW_STORE)) {
+        const reviews = db.createObjectStore(REVIEW_STORE, {keyPath:'id'});
+        reviews.createIndex('byInspection', 'inspectionId', {unique:false});
+      }
     };
     request.onsuccess = () => {
       request.result.onversionchange = () => request.result.close();
@@ -145,7 +150,7 @@ export function createInspectionRepository({db, cryptoImpl = globalThis.crypto} 
     },
     async remove(id) {
       if (typeof id !== 'string' || !id) throw new TypeError('Inspection ID required');
-      const tx = db.transaction([RECORD_STORE,SOURCE_STORE,OVERLAY_STORE], 'readwrite');
+      const tx = db.transaction([RECORD_STORE,SOURCE_STORE,OVERLAY_STORE,REVIEW_STORE], 'readwrite');
       return txResult(tx, (done, fail) => {
         const records = tx.objectStore(RECORD_STORE);
         const get = records.get(id);
@@ -160,10 +165,16 @@ export function createInspectionRepository({db, cryptoImpl = globalThis.crypto} 
               fail(new Error('연결된 재검사 기록이 남아 있습니다. 가장 최근 재검사부터 삭제해 주세요.'));
               return;
             }
-            records.delete(id);
-            tx.objectStore(OVERLAY_STORE).delete(id);
-            if (others.result.length === 1 && others.result[0].id === id) tx.objectStore(SOURCE_STORE).delete(record.sourceId);
-            done(true);
+            // Explicit record deletion must atomically remove associated audit events.
+            const reviewStore = tx.objectStore(REVIEW_STORE);
+            const audit = reviewStore.index('byInspection').getAllKeys(id);
+            audit.onsuccess = () => {
+              for (const eventId of audit.result) reviewStore.delete(eventId);
+              records.delete(id);
+              tx.objectStore(OVERLAY_STORE).delete(id);
+              if (others.result.length === 1 && others.result[0].id === id) tx.objectStore(SOURCE_STORE).delete(record.sourceId);
+              done(true);
+            };
           };
         };
       });

@@ -27,7 +27,7 @@ await service.close();
 
 ## IndexedDB
 
-- DB 이름 `visionqc-inspections-v1`, **DB_VERSION=2**. 버전 1의 `sourceImages`, `inspections`, `heatmaps` 유지. `inspectionQueue` 스토어 추가.
+- DB 이름 `visionqc-inspections-v1`, **DB_VERSION=3** (현재; v2 대기열 보존 + 작업자 판정 저장소 추가). 버전 1의 `sourceImages`, `inspections`, `heatmaps` 유지. `inspectionQueue` 스토어 추가(v2); 작업자 판정 이벤트 스토어 추가(v3).
 - 상태: `queued`, `running`, `interrupted`, `paused_system`, `completed`, `failed_image`, `canceled`.
 - 큐 작업의 파일 Blob은 불변 검사 결과가 저장될 때까지 큐에 보존한다. `completed`나 명시적 `canceled`는 큐 Blob 참조를 비워 저장 공간을 절약한다. **검사 원본과 검사 기록은 자동 삭제하지 않는다.**
 - 페이지 재개 시 `running` 상태는 `interrupted`로 기록만 변경. 사용자가 `startInspectionQueue()`를 다시 눌러야 처리됨.
