@@ -1,28 +1,40 @@
 /** Concrete browser adapter: preflight PatchCore -> optional PNG overlay -> transactional IndexedDB. */
 import {runMetalNutPreflight, makeOverlayBlob} from './patchcore';
 import {createInspectionService} from './inspectionService.mjs';
+import {createManagedInspectionService} from './serviceLifecycle.mjs';
 import {openInspectionDatabase, createInspectionRepository} from '../storage/inspectionDb.mjs';
 import {acquireInspectionTabLock} from '../storage/inspectionLock.mjs';
 
 /**
- * Only run in a secure browser context. The owning UI must close this repository
- * when its inspection screen is unmounted. No auto-upload/network telemetry.
+ * Open an exclusive session, usable in secure browser contexts only.
+ * Every caller MUST await `service.close()` on unmount. Close rejects new
+ * calls immediately, drains active inference / save / reads, then releases
+ * IndexedDB and the one-active-tab Web Lock in that order.
  */
 export async function openBrowserInspectionService() {
   const tabLock = await acquireInspectionTabLock();
-  let db: IDBDatabase;
-  try { db = await openInspectionDatabase(); }
-  catch (error) { await tabLock.release(); throw error; }
-  let repository: ReturnType<typeof createInspectionRepository>;
-  try { repository = createInspectionRepository({db}); }
-  catch (error) { db.close(); await tabLock.release(); throw error; }
-  const service = createInspectionService({repository, infer:runMetalNutPreflight, renderOverlay:makeOverlayBlob});
-  return {
-    inspectAndSave: service.inspectAndSave,
-    list: repository.list,
-    get: repository.get,
-    remove: repository.remove,
-    close() { repository.close(); return tabLock.release(); },
-    databaseName: repository.databaseName,
-  };
+  let db: IDBDatabase | undefined;
+  try {
+    const opened = await openInspectionDatabase();
+    db = opened;
+    const repository = createInspectionRepository({db: opened});
+    const service = createInspectionService({repository, infer:runMetalNutPreflight, renderOverlay:makeOverlayBlob});
+    const managed = createManagedInspectionService({
+      methods: {
+        inspectAndSave: service.inspectAndSave,
+        list: repository.list,
+        get: repository.get,
+        remove: repository.remove,
+      },
+      dispose: async () => {
+        try { repository.close(); }
+        finally { await tabLock.release(); }
+      },
+    });
+    return {...managed, databaseName: repository.databaseName};
+  } catch (error) {
+    try { db?.close(); }
+    finally { await tabLock.release(); }
+    throw error;
+  }
 }

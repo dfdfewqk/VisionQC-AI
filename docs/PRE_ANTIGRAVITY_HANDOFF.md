@@ -23,7 +23,7 @@ const rows = await service.list({sourceType:'user', limit:50, offset:0});
 const details = await service.get(record.id); // {inspection, source, overlay}
 // 삭제는 화면에서 사용자 확인을 받은 이후에만 호출:
 await service.remove(record.id);
-await service.close(); // 활성 검사 탭 잠금 해제
+await service.close(); // 진행 중 검사/저장 완료까지 대기한 뒤 DB 및 탭 잠금 해제
 ```
 
 `src/storage/inspectionDb.mjs` 원본 해시 키는 **동일 파일 바이트**를 뜻할 뿐, 사진 두 장이 같은 물리적 너트라는 증거가 아니다. 동일 사진에 ROI를 여러 개 검사하면 검사 ID를 다르게 저장할 수 있다. 원본 Blob은 공유하고, 검사별 결과·히트맵 PNG는 별도 저장한다.
@@ -39,14 +39,14 @@ await service.close(); // 활성 검사 탭 잠금 해제
 
 ## 수정 금지 경계
 
-- ChatGPT 선행 파일: `src/ai/patchcore.ts`, `src/ai/modelAssets.mjs`, `src/ai/modelContract.mjs`, `src/ai/geometry.mjs`, `src/ai/imageQuality.mjs`, `src/ai/candidateDecision.mjs`, `src/ai/inspectionService.mjs`, `src/ai/browserInspectionService.ts`, `src/storage/*`.
+- ChatGPT 선행 파일: `src/ai/patchcore.ts`, `src/ai/modelAssets.mjs`, `src/ai/modelContract.mjs`, `src/ai/geometry.mjs`, `src/ai/imageQuality.mjs`, `src/ai/candidateDecision.mjs`, `src/ai/inspectionService.mjs`, `src/ai/serviceLifecycle.mjs`, `src/ai/browserInspectionService.ts`, `src/storage/*`.
 - Antigravity 작업 영역: `src/main.tsx`, `src/components/`, `src/styles/`, `src/camera/`, `src/detection/`. 필요하면 접점 함수를 먼저 합의한 후 수정.
 - `main`은 안정 배포용으로 유지하고, Antigravity는 자체 기능 브랜치→`develop` PR 사용. CI 통과 전 병합 금지.
 
 ## Antigravity에서 반드시 확인할 브라우저 테스트
 
 - **ROI 엔진 연결은 준비됨:** 선택 ROI를 `inspectAndSave({file,roi})`로 넘기면 원본 좌표를 저장하며 추론/히트맵에 실제로 반영된다. 다만 자동 탐지 모델과 사용자 ROI 검증은 여전히 미구현.
-- Chrome 활성 검사 탭 한 개만 허용. 다른 탭에서는 `inspection_tab_busy`를 안내하고 종료 시 `service.close()` 호출.
+- Chrome 활성 검사 탭 한 개만 허용. 다른 탭에서는 `inspection_tab_busy`를 안내하고 종료 시 반드시 `await service.close()` 호출. 이 호출은 진행 중인 검사/조회/삭제가 종료될 때까지 기다린 후 DB와 Web Lock을 닫으며 종료가 시작된 뒤의 새 작업에는 `inspection_session_closed` 오류를 반환한다. React의 async unmount 정리에서는 Promise를 처리하고 중복 호출해도 안전하다.
 
 
 1. Windows Chrome 최신 버전에서 `npm install`, `npm test`, `npm run build`, `npm run dev`를 실행한다.
