@@ -86,3 +86,10 @@ await service.close(); // 진행 중 검사/저장 완료까지 대기한 뒤 DB
 - 실제 사람의 신원 인증이 아닌 로컬 식별명 기록임을 명시; AI 후보와 작업자 최종 판단을 분리 표시한다. 출고 자동 승인과 물리적 제품 단위 불량률을 생성하지 않는다.
 - DB v2→v3은 스토어만 추가하고 기존 원본·검사·대기열을 유지한다. 사용자 명시적 검사 삭제 시 연관된 판정 감사 이벤트를 같은 트랜잭션에서 삭제한다.
 - 상세 인터페이스와 안전 제한: `docs/HUMAN_REVIEW_AUDIT_CONTRACT.md`.
+
+
+## 검사 이력 검색·품질 통계 연결 (ChatGPT 작업)
+
+- `service.searchInspectionHistory({sourceType:'user', period:'7d', timezoneOffsetMinutes:540, humanVerdict:'defective',limit:50,offset:0})` 는 검사+최신 작업자 판정을 연결한 메타데이터 목록을 반환한다. 원본 이미지 Blob은 `get(id)`에서만 읽는다.
+- `service.qualityStatistics({sourceType:'user',period:'30d',timezoneOffsetMinutes:540})` 는 AI **중복 제거 시야 비율**과 작업자 **확정 검사 실행 비율**을 분리한다. 물리적 제품 불량률은 `null`이다.
+- 검색 조건, 시간대, 분모, 미확정 제외 규칙: `docs/INSPECTION_HISTORY_STATISTICS_CONTRACT.md`. 이력/통계 UI는 아직 미구현이며 Antigravity 범위다.

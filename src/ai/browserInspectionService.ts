@@ -6,6 +6,7 @@ import {openInspectionDatabase, createInspectionRepository} from '../storage/ins
 import {acquireInspectionTabLock} from '../storage/inspectionLock.mjs';
 import {createInspectionQueueRepository} from '../storage/inspectionQueueDb.mjs';
 import {createHumanReviewRepository} from '../storage/humanReviewDb.mjs';
+import {createInspectionHistoryRepository} from '../storage/inspectionHistoryDb.mjs';
 import {createInspectionQueueRunner} from './inspectionQueue.mjs';
 
 /**
@@ -24,6 +25,7 @@ export async function openBrowserInspectionService() {
     const service = createInspectionService({repository, infer:runMetalNutPreflight, renderOverlay:makeOverlayBlob});
     const queue = createInspectionQueueRepository({db:opened});
     const reviews = createHumanReviewRepository({db:opened});
+    const history = createInspectionHistoryRepository({db:opened});
     // No automatic run on page load. Interrupted work survives and needs
     // an explicit user action to resume after reviewing queue metadata.
     await queue.recoverInterrupted();
@@ -41,6 +43,8 @@ export async function openBrowserInspectionService() {
         listHumanReviewHistory: reviews.history,
         latestHumanReview: reviews.latest,
         summarizeHumanReviews: reviews.summary,
+        searchInspectionHistory: history.search,
+        qualityStatistics: history.qualityStatistics,
         enqueueInspection: queue.enqueue,
         listInspectionQueue: queue.list,
         startInspectionQueue: runner.runQueue,
