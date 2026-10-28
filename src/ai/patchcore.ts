@@ -3,6 +3,7 @@ import { centerCropRect, metalNutThreshold, normalizeAnomalyMap } from './geomet
 import { validateFeatureTensor, parseModelOutputs } from './modelContract.mjs';
 import { fetchVerifiedModelAsset, MODEL_REVISION } from './modelAssets.mjs';
 import { assessCandidate } from './candidateDecision.mjs';
+import { assessImageQuality, assertImageQuality, inspectImageInput, inspectImageDimensions, ImageQualityHoldError } from './imageQuality.mjs';
 
 export { MODEL_REPOSITORY, MODEL_REVISION } from './modelAssets.mjs';
 
@@ -16,6 +17,7 @@ export type InferenceResult = {
   score: number;
   threshold: number | null;
   candidate: ReturnType<typeof assessCandidate>;
+  quality: ReturnType<typeof assessImageQuality>;
   map: Normalization;
   crop: Crop;
   width: number;
@@ -95,7 +97,7 @@ export function releaseModel(): Promise<void> {
 }
 
 /** This is ONLY a reference crop for ONNX feasibility. Object detection is not yet wired. */
-async function preprocess(bitmap: ImageBitmap): Promise<{ tensor: ort.Tensor; crop: Crop }> {
+async function preprocess(bitmap: ImageBitmap): Promise<{ tensor: ort.Tensor; crop: Crop; quality: ReturnType<typeof assessImageQuality> }> {
   const crop = centerCropRect(bitmap.width, bitmap.height);
   const canvas = document.createElement('canvas');
   canvas.width = MODEL_SIZE;
@@ -104,6 +106,10 @@ async function preprocess(bitmap: ImageBitmap): Promise<{ tensor: ort.Tensor; cr
   if (!ctx) throw new Error('Canvas 2D is unavailable');
   ctx.drawImage(bitmap, crop.x, crop.y, crop.width, crop.height, 0, 0, MODEL_SIZE, MODEL_SIZE);
   const pixels = ctx.getImageData(0, 0, MODEL_SIZE, MODEL_SIZE).data;
+  const quality = assessImageQuality({ width: bitmap.width, height: bitmap.height,
+    rgba: pixels, analysisWidth: MODEL_SIZE, analysisHeight: MODEL_SIZE });
+  // Do not download models or issue ONNX inference on unusable photos.
+  assertImageQuality(quality);
   const numPixels = MODEL_SIZE * MODEL_SIZE;
   const data = new Float32Array(3 * numPixels);
   for (let p = 0; p < numPixels; p++) {
@@ -111,15 +117,24 @@ async function preprocess(bitmap: ImageBitmap): Promise<{ tensor: ort.Tensor; cr
       data[c * numPixels + p] = ((pixels[p * 4 + c] / 255) - MEAN[c]) / STD[c];
     }
   }
-  return { tensor: new ort.Tensor('float32', data, [1, 3, MODEL_SIZE, MODEL_SIZE]), crop };
+  return { tensor: new ort.Tensor('float32', data, [1, 3, MODEL_SIZE, MODEL_SIZE]), crop, quality };
 }
 
 export function runMetalNutPreflight(image: File): Promise<InferenceResult> {
   return enqueueModelOperation(async () => {
     const started = performance.now();
-    const bitmap = await createImageBitmap(image, { imageOrientation: 'from-image' });
+    // File-level errors and visible quality holds are explicit, recoverable
+    // cases, NOT model inference or defect detection failures.
+    assertImageQuality(inspectImageInput(image));
+    let bitmap: ImageBitmap;
+    try { bitmap = await createImageBitmap(image, { imageOrientation: 'from-image' }); }
+    catch (error) {
+      throw new ImageQualityHoldError({status: 'hold', reasonCodes: ['image_decode_failed'],
+        qualityVerifiedForClassification: false, requiresHumanReview: true, cause: error });
+    }
     try {
-      const { tensor, crop } = await preprocess(bitmap);
+      assertImageQuality(inspectImageDimensions(bitmap.width, bitmap.height));
+      const { tensor, crop, quality } = await preprocess(bitmap);
       const { backbone, knn } = await getSessions();
       const features = await backbone.run({ image: tensor });
       const featureTensor = validateFeatureTensor(features[backbone.outputNames[0]]);
@@ -131,7 +146,7 @@ export function runMetalNutPreflight(image: File): Promise<InferenceResult> {
         // Preflight only uses a center crop. No verified object ROI, domain
         // suitability, or field calibration: the candidate MUST stay pending.
         candidate: assessCandidate({ score, modelRevision: MODEL_REVISION }),
-        map, crop,
+        quality, map, crop,
         width: bitmap.width, height: bitmap.height,
         elapsedMs: Math.round(performance.now() - started),
         modelIds: [`backbone.onnx@${MODEL_REVISION}`, `knn_metal_nut.onnx@${MODEL_REVISION}`],
