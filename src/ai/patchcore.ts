@@ -1,10 +1,10 @@
 import * as ort from 'onnxruntime-web/wasm';
 import { centerCropRect, metalNutThreshold, normalizeAnomalyMap } from './geometry.mjs';
 import { validateFeatureTensor, parseModelOutputs } from './modelContract.mjs';
+import { fetchVerifiedModelAsset, MODEL_REVISION } from './modelAssets.mjs';
 
-export const MODEL_REPOSITORY = 'https://huggingface.co/yandyassine/patchcore-mvtec-ad';
-const MODEL_BASE = `${MODEL_REPOSITORY}/resolve/main`;
-const CACHE_NAME = 'visionqc-model-preflight-v1';
+export { MODEL_REPOSITORY, MODEL_REVISION } from './modelAssets.mjs';
+
 const MODEL_SIZE = 224;
 const MEAN = [0.485, 0.456, 0.406] as const;
 const STD = [0.229, 0.224, 0.225] as const;
@@ -26,28 +26,9 @@ type Sessions = { backbone: ort.InferenceSession; knn: ort.InferenceSession };
 let sessions: Sessions | null = null;
 let loadPromise: Promise<Sessions> | null = null;
 
-async function fetchCached(relativePath: string): Promise<ArrayBuffer> {
-  const url = `${MODEL_BASE}/${relativePath}`;
-  // Readable CORS response is mandatory; do not accept opaque responses.
-  // CacheStorage is used only for static model files, never uploaded photos.
-  let cache: Cache | null = null;
-  try { if ('caches' in globalThis) cache = await caches.open(CACHE_NAME); } catch { /* nonfatal */ }
-  const existing = await cache?.match(url);
-  if (existing) return await existing.arrayBuffer();
-  const response = await fetch(url, { mode: 'cors' });
-  if (!response.ok || response.type === 'opaque') throw new Error(`모델 다운로드 실패 (${response.status}): ${relativePath}`);
-  const bytes = await response.arrayBuffer();
-  if (relativePath.endsWith('.onnx') && bytes.byteLength < 1_000_000) {
-    throw new Error(`모델 파일이 예상보다 작습니다: ${relativePath}`);
-  }
-  try { await cache?.put(url, new Response(bytes.slice(0), { headers: { 'Content-Type': 'application/octet-stream' } })); }
-  catch { /* storage is best effort, do not block inference */ }
-  return bytes;
-}
-
 async function threshold(): Promise<number | null> {
   try {
-    const bytes = await fetchCached('thresholds.json');
+    const bytes = await fetchVerifiedModelAsset('thresholds.json');
     return metalNutThreshold(JSON.parse(new TextDecoder().decode(bytes)));
   } catch (error) {
     console.warn('Threshold unavailable; no classification will be asserted', error);
@@ -55,26 +36,30 @@ async function threshold(): Promise<number | null> {
   }
 }
 
-async function initialize() {
+async function initialize(): Promise<Sessions> {
   ort.env.wasm.numThreads = 1;
   ort.env.wasm.proxy = false;
   ort.env.wasm.wasmPaths = '/ort/';
-  const bbBytes = await fetchCached('backbone.onnx');
-  const backbone = await ort.InferenceSession.create(bbBytes, { executionProviders: ['wasm'] });
+  let backbone: ort.InferenceSession | null = null;
+  let knn: ort.InferenceSession | null = null;
   try {
-    const knnBytes = await fetchCached('knn_metal_nut.onnx');
-    const knn = await ort.InferenceSession.create(knnBytes, { executionProviders: ['wasm'] });
+    const bbBytes = await fetchVerifiedModelAsset('backbone.onnx');
+    backbone = await ort.InferenceSession.create(bbBytes, { executionProviders: ['wasm'] });
+    const knnBytes = await fetchVerifiedModelAsset('knn_metal_nut.onnx');
+    knn = await ort.InferenceSession.create(knnBytes, { executionProviders: ['wasm'] });
     if (!backbone.inputNames.includes('image') || !knn.inputNames.includes('features')) {
       throw new Error('공개 모델의 입력 이름이 문서와 다릅니다');
     }
     return { backbone, knn };
   } catch (error) {
-    await backbone.release();
+    // Release both models even when the second session was already created.
+    if (knn) await knn.release().catch(releaseError => console.warn('KNN release failed', releaseError));
+    if (backbone) await backbone.release().catch(releaseError => console.warn('Backbone release failed', releaseError));
     throw error;
   }
 }
 
-async function getSessions() {
+async function getSessions(): Promise<Sessions> {
   if (sessions) return sessions;
   if (!loadPromise) loadPromise = initialize();
   try {
@@ -82,16 +67,29 @@ async function getSessions() {
     sessions = loaded;
     return loaded;
   } catch (error) {
-    loadPromise = null;
+    loadPromise = null; // A later attempt can retry a failed model download/load.
     throw error;
   }
 }
 
-export async function releaseModel() {
-  const old = sessions;
-  sessions = null;
-  loadPromise = null;
-  if (old) { await old.knn.release(); await old.backbone.release(); }
+// All inference and session release operations share one FIFO promise gate.
+// This prevents a user-triggered release from destroying an active ORT session.
+let operationTail: Promise<void> = Promise.resolve();
+function enqueueModelOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const current = operationTail.then(operation);
+  operationTail = current.then(() => undefined, () => undefined);
+  return current;
+}
+
+export function releaseModel(): Promise<void> {
+  return enqueueModelOperation(async () => {
+    const old = sessions;
+    sessions = null;
+    loadPromise = null;
+    if (!old) return;
+    try { await old.knn.release(); }
+    finally { await old.backbone.release(); }
+  });
 }
 
 /** This is ONLY a reference crop for ONNX feasibility. Object detection is not yet wired. */
@@ -114,24 +112,26 @@ async function preprocess(bitmap: ImageBitmap): Promise<{ tensor: ort.Tensor; cr
   return { tensor: new ort.Tensor('float32', data, [1, 3, MODEL_SIZE, MODEL_SIZE]), crop };
 }
 
-export async function runMetalNutPreflight(image: File): Promise<InferenceResult> {
-  const started = performance.now();
-  const bitmap = await createImageBitmap(image, { imageOrientation: 'from-image' });
-  try {
-    const { tensor, crop } = await preprocess(bitmap);
-    const { backbone, knn } = await getSessions();
-    const features = await backbone.run({ image: tensor });
-    const featureTensor = validateFeatureTensor(features[backbone.outputNames[0]]);
-    const outputs = await knn.run({ features: featureTensor });
-    const { map: raw, score } = parseModelOutputs(outputs);
-    const map = normalizeAnomalyMap(raw);
-    return {
-      score, threshold: await threshold(), map, crop,
-      width: bitmap.width, height: bitmap.height,
-      elapsedMs: Math.round(performance.now() - started),
-      modelIds: ['backbone.onnx', 'knn_metal_nut.onnx'],
-    };
-  } finally { bitmap.close(); }
+export function runMetalNutPreflight(image: File): Promise<InferenceResult> {
+  return enqueueModelOperation(async () => {
+    const started = performance.now();
+    const bitmap = await createImageBitmap(image, { imageOrientation: 'from-image' });
+    try {
+      const { tensor, crop } = await preprocess(bitmap);
+      const { backbone, knn } = await getSessions();
+      const features = await backbone.run({ image: tensor });
+      const featureTensor = validateFeatureTensor(features[backbone.outputNames[0]]);
+      const outputs = await knn.run({ features: featureTensor });
+      const { map: raw, score } = parseModelOutputs(outputs);
+      const map = normalizeAnomalyMap(raw);
+      return {
+        score, threshold: await threshold(), map, crop,
+        width: bitmap.width, height: bitmap.height,
+        elapsedMs: Math.round(performance.now() - started),
+        modelIds: [`backbone.onnx@${MODEL_REVISION}`, `knn_metal_nut.onnx@${MODEL_REVISION}`],
+      };
+    } finally { bitmap.close(); }
+  });
 }
 
 /** Draw local-contrast heatmap in the original photo coordinate system. */
