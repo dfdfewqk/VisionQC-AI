@@ -15,8 +15,9 @@ export async function openBrowserInspectionService() {
   const tabLock = await acquireInspectionTabLock();
   let db: IDBDatabase | undefined;
   try {
-    db = await openInspectionDatabase();
-    const repository = createInspectionRepository({db});
+    const opened = await openInspectionDatabase();
+    db = opened;
+    const repository = createInspectionRepository({db: opened});
     const service = createInspectionService({repository, infer:runMetalNutPreflight, renderOverlay:makeOverlayBlob});
     const managed = createManagedInspectionService({
       methods: {
