@@ -1,6 +1,6 @@
 import * as ort from 'onnxruntime-web/wasm';
 import { centerCropRect, metalNutThreshold, normalizeAnomalyMap } from './geometry.mjs';
-import { validateFeatureTensor, parseAnomalyOutputs } from './modelContract.mjs';
+import { validateFeatureTensor, parseModelOutputs } from './modelContract.mjs';
 
 export const MODEL_REPOSITORY = 'https://huggingface.co/yandyassine/patchcore-mvtec-ad';
 const MODEL_BASE = `${MODEL_REPOSITORY}/resolve/main`;
@@ -123,7 +123,7 @@ export async function runMetalNutPreflight(image: File): Promise<InferenceResult
     const features = await backbone.run({ image: tensor });
     const featureTensor = validateFeatureTensor(features[backbone.outputNames[0]]);
     const outputs = await knn.run({ features: featureTensor });
-    const { map: raw, score } = parseAnomalyOutputs(outputs[knn.outputNames[0]], outputs[knn.outputNames[1]]);
+    const { map: raw, score } = parseModelOutputs(outputs);
     const map = normalizeAnomalyMap(raw);
     return {
       score, threshold: await threshold(), map, crop,
