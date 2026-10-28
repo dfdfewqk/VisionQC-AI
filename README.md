@@ -47,7 +47,7 @@ npm run dev
 | ONNX 브라우저 실제 로딩 및 추론 | **미검증** — 이 개발 환경의 외부 네트워크 차단 |
 | Vite 전체 빌드 | **미검증** — 현재 실행 환경에서 npm 레지스트리 DNS 접근 불가로 의존성 설치 실패 |
 | 자동 너트 탐지 / 촬영 | 아직 미구현 |
-| GitHub 원격 저장소 | `dfdfewqk/VisionQC-AI` 확인됨. 초기 업로드 진행 예정. |
+| GitHub 원격 저장소 | `dfdfewqk/VisionQC-AI` 확인됨. 초기 19개 소스 파일 업로드 완료. |
 | Vercel 공개 URL | 아직 미배포 |
 
 ## 데이터·라이선스
@@ -64,6 +64,6 @@ npm run dev
 
 ## GitHub 연동 및 공개 상태 (2026-10-28)
 
-GitHub 원격 저장소는 `dfdfewqk/VisionQC-AI`로 확인되었습니다. 이 저장소는 현재 **Public**이며, 개발 중 Private을 유지하려던 초기 설계와 다릅니다. 필요한 경우 저장소 설정에서 Private으로 변경해야 합니다. 이 저장소의 샘플 소스에는 실제 API 키·모델 가중치·검사 이미지가 포함되지 않습니다.
+GitHub 원격 저장소 `dfdfewqk/VisionQC-AI`에 v0.1.1 초기 소스 파일을 업로드하고 `main`·`develop` 브랜치를 구성했습니다. 이 저장소는 현재 **Public**이며, 개발 중 Private을 유지하려던 초기 설계와 다릅니다. 필요한 경우 저장소 설정에서 Private으로 변경해야 합니다. 이 저장소의 샘플 소스에는 실제 API 키·모델 가중치·검사 이미지가 포함되지 않습니다.
 
 현재 환경에서 `npm test`는 12/12 통과했습니다. npm 레지스트리 연결 제한으로 `package-lock.json`을 생성하지 못했으며, 실제 `npm install` 및 전체 빌드는 CI에서 확인해야 합니다. 이 상태를 빌드 성공이라고 표시하지 않습니다.
