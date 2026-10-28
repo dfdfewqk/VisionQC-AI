@@ -3,7 +3,13 @@ import {createHeldSnapshot, createInferredSnapshot} from '../storage/inspectionM
 import {ImageQualityHoldError} from './imageQuality.mjs';
 
 const makeId = () => globalThis.crypto.randomUUID();
-/** Only capture a return value once persistence transaction successfully commits. */
+/**
+ * Only capture a return value once persistence transaction successfully commits.
+ * @param {{repository: {fingerprint: (file: Blob)=>Promise<string>, save: (args: any)=>Promise<any>},
+ *   infer: (file: File)=>Promise<any>,
+ *   renderOverlay?: ((file: File, inference: any)=>Promise<Blob>)|null,
+ *   uuid?: ()=>string, clock?: ()=>string}} options
+ */
 export function createInspectionService({repository, infer, renderOverlay = null, uuid = makeId,
   clock = () => new Date().toISOString()} = {}) {
   if (!repository?.fingerprint || !repository?.save || typeof infer !== 'function') {
