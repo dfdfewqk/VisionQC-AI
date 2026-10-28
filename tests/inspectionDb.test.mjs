@@ -104,3 +104,57 @@ test('inference-to-IDB integration persists selected rotated ROI, shares source 
  await repo.remove(first.id);assert.ok((await repo.get(second.id)).source.blob);
  repo.close();
 });
+
+test('duplicate query uses exact photo and ROI while preserving separately scanned ROI',async()=>{
+ const repo=await createRepo();const file=photo('duplicate-preview');const sourceId=await repo.fingerprint(file);
+ const first=valid('first',sourceId);first.roiTransform={x:10,y:20,width:240,height:240,rotationDegrees:0,modelSize:224,source:'user_selected_unverified'};
+ const second=valid('second',sourceId);second.roi={x:400,y:100,width:240,height:240};
+ second.roiTransform={...second.roi,rotationDegrees:0,modelSize:224,source:'user_selected_unverified'};
+ await repo.save({file,snapshot:first});await repo.save({file,snapshot:second});
+ const found=await repo.findDuplicates({file,roi:{x:10,y:20,width:240,height:240}});
+ assert.equal(found.hasExactSource,true);assert.equal(found.matchingSource.length,2);
+ assert.deepEqual(found.matchingView.map(x=>x.id),['first']);
+ const stats=await repo.statistics();assert.equal(stats.distinctViews,2);assert.equal(stats.uniqueProducts,null);
+ repo.close();
+});
+
+test('new explicit same-ROI reinspection creates immutable link and avoids double counting',async()=>{
+ const repo=await createRepo(),file=photo('original-photo');const s=await repo.fingerprint(file);
+ await repo.save({file,snapshot:valid('first',s)});
+ const child=valid('rescan',s);child.reinspectionOf='first';
+ await repo.save({file,snapshot:child});
+ const row=await repo.get('rescan');assert.equal(row.inspection.reinspectionOf,'first');
+ const stats=await repo.statistics();assert.equal(stats.totalAttempts,2);assert.equal(stats.distinctViews,1);
+ assert.equal(stats.repeatedAttempts,1);
+ await assert.rejects(()=>repo.remove('first'),/재검사/);
+ assert.ok(await repo.get('first'));assert.ok(await repo.get('rescan'));
+ await repo.remove('rescan');await repo.remove('first');assert.deepEqual(await repo.list(),[]);
+ repo.close();
+});
+
+test('wrong original, different source and changed ROI reject child atomically',async()=>{
+ const repo=await createRepo(),file=photo('lineage-test'),other=photo('different');
+ const s=await repo.fingerprint(file),otherId=await repo.fingerprint(other);
+ await repo.save({file,snapshot:valid('root',s)});
+ const missing=valid('missing',s);missing.reinspectionOf='unknown';
+ await assert.rejects(()=>repo.save({file,snapshot:missing}),/원본 기록/);
+ const rotated=valid('rotated',s);rotated.roi={x:50,y:20,width:240,height:240};rotated.reinspectionOf='root';
+ await assert.rejects(()=>repo.save({file,snapshot:rotated}),/동일 원본/);
+ const newPhoto=valid('other-photo',otherId);newPhoto.reinspectionOf='root';
+ await assert.rejects(()=>repo.save({file:other,snapshot:newPhoto}),/동일 원본/);
+ assert.deepEqual((await repo.list()).map(x=>x.id),['root']);
+ repo.close();
+});
+
+test('reinspection through AI service forwards explicit prior ID and is preserved',async()=>{
+ const repo=await createRepo(),file=photo('reinspect-via-service');let next=0;
+ const service=createInspectionService({repository:repo,uuid:()=>`service-${++next}`,clock:()=>`2026-10-28T08:00:0${next}Z`,
+  infer:async()=>({width:800,height:700,crop:{x:10,y:20,width:240,height:240},score:2,threshold:null,
+    candidate:{code:'review_required',isFinalVerdict:false,reasonCodes:['calibration_missing']},
+    modelIds:['pinned'],elapsedMs:2})});
+ const original=await service.inspectAndSave({file});
+ const repeat=await service.inspectAndSave({file,reinspectionOf:original.id});
+ assert.equal(repeat.reinspectionOf,original.id);
+ assert.equal((await repo.statistics()).distinctViews,1);
+ repo.close();
+});

@@ -65,7 +65,7 @@ test('ROI inference snapshot preserves reviewed geometry transform without autom
   score:2,threshold:null,candidate:{code:'review_required',isFinalVerdict:false,reasonCodes:['roi_unverified']},
   quality:{status:'preflight_ok'},modelIds:['model'],elapsedMs:18};
  const saved=createInferredSnapshot({id:'rotated',sourceId:'sha256:abc',createdAt:'2026-10-28T07:00:00Z',inference});
- assert.deepEqual(saved.roiTransform,roi);assert.equal(saved.schemaVersion,2);assert.equal(saved.humanVerdict,null);
+ assert.deepEqual(saved.roiTransform,roi);assert.equal(saved.schemaVersion,3);assert.equal(saved.humanVerdict,null);
  assert.throws(()=>createInspectionSnapshot({...saved,roiTransform:{...roi,rotationDegrees:181}}),/rotation|valid/);
  assert.throws(()=>createInspectionSnapshot({...saved,roiTransform:{...roi,x:99}}),/differs/);
 });

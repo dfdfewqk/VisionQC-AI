@@ -16,7 +16,7 @@ export function createInspectionService({repository, infer, renderOverlay = null
     throw new TypeError('Repository fingerprint/save and AI inference functions are required');
   }
   return {
-    async inspectAndSave({file, sourceType = 'user', lotId = null, productId = null, roi = null} = {}) {
+    async inspectAndSave({file, sourceType = 'user', lotId = null, productId = null, roi = null, reinspectionOf = null} = {}) {
       // Source hash computation occurs before inference, ensuring exact photo-identity linkage.
       const sourceId = await repository.fingerprint(file);
       const id = uuid();
@@ -24,7 +24,7 @@ export function createInspectionService({repository, infer, renderOverlay = null
       let snapshot, overlay = null;
       try {
         const inference = await infer(file, {roi});
-        snapshot = createInferredSnapshot({id,sourceId,createdAt,sourceType,lotId,productId,inference});
+        snapshot = createInferredSnapshot({id,sourceId,createdAt,sourceType,lotId,productId,reinspectionOf,inference});
         if (renderOverlay) overlay = await renderOverlay(file,inference);
       } catch (error) {
         // Only recoverable image-quality holds may become saved inspection holds.
@@ -34,7 +34,7 @@ export function createInspectionService({repository, infer, renderOverlay = null
           ? error.report.sourceWidth : null;
         const height = Number.isSafeInteger(error.report?.sourceHeight) && error.report.sourceHeight > 0
           ? error.report.sourceHeight : null;
-        snapshot = createHeldSnapshot({id,sourceId,createdAt,sourceType,lotId,productId,
+        snapshot = createHeldSnapshot({id,sourceId,createdAt,sourceType,lotId,productId,reinspectionOf,
           width,height,report:error.report});
       }
       await repository.save({file,snapshot,overlay});

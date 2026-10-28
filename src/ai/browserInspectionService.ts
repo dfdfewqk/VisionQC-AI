@@ -25,6 +25,8 @@ export async function openBrowserInspectionService() {
         list: repository.list,
         get: repository.get,
         remove: repository.remove,
+        findDuplicates: repository.findDuplicates,
+        statistics: repository.statistics,
       },
       dispose: async () => {
         try { repository.close(); }

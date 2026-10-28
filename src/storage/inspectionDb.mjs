@@ -1,5 +1,6 @@
 /** VisionQC v1 browser-local IndexedDB storage: shared originals, separate ROI inspections and overlays. */
 import {createInspectionSnapshot} from './inspectionModel.mjs';
+import {findMatchingSourceViews, summarizeInspectionViews, validateReinspection} from './inspectionLineage.mjs';
 
 export const DEFAULT_DB_NAME = 'visionqc-inspections-v1';
 export const DB_VERSION = 1;
@@ -83,18 +84,42 @@ export function createInspectionRepository({db, cryptoImpl = globalThis.crypto} 
       // Revalidate and deep copy, refusing speculative final human decisions or arbitrary payloads.
       const record = createInspectionSnapshot(snapshot);
       const tx = db.transaction([SOURCE_STORE,RECORD_STORE,OVERLAY_STORE], 'readwrite');
-      return txResult(tx, done => {
+      return txResult(tx, (done, fail) => {
         const original = tx.objectStore(SOURCE_STORE);
         const inspections = tx.objectStore(RECORD_STORE);
         const existing = original.get(source.id);
         existing.onsuccess = () => {
-          if (!existing.result) original.add(source);
-          // add() rather than put(): never overwrite an immutable inspection with the same ID.
-          inspections.add(record);
-          if (overlay) tx.objectStore(OVERLAY_STORE).add({inspectionId:record.id,blob:overlay});
-          done({id:record.id,sourceId:source.id});
+          const persist = () => {
+            if (!existing.result) original.add(source);
+            // add() rather than put(): never overwrite an immutable inspection with the same ID.
+            inspections.add(record);
+            if (overlay) tx.objectStore(OVERLAY_STORE).add({inspectionId:record.id,blob:overlay});
+            done({id:record.id,sourceId:source.id});
+          };
+          if (record.reinspectionOf === null) { persist(); return; }
+          // Validate the referenced immutable parent INSIDE the same write transaction.
+          // A missing/deleted/different-ROI parent aborts all writes atomically.
+          const parent = inspections.get(record.reinspectionOf);
+          parent.onsuccess = () => {
+            try { validateReinspection(parent.result, record); persist(); }
+            catch (error) { fail(error); }
+          };
         };
       });
+    },
+    /** Exact byte-identical file warning; a matching ROI is not a physical-product ID. */
+    async findDuplicates({file, roi = null, sourceType = 'user'} = {}) {
+      const source = await prepareSource(file);
+      const tx = db.transaction(RECORD_STORE, 'readonly');
+      const rows = await requestValue(tx.objectStore(RECORD_STORE).index('bySource').getAll(source.id));
+      return findMatchingSourceViews(rows, {sourceId:source.id,sourceType,roi});
+    },
+    /** Snapshot-only view counts. Does not claim product-level defect rates. */
+    async statistics({sourceType = 'user'} = {}) {
+      if (!['user','demo'].includes(sourceType)) throw new TypeError('Invalid source provenance');
+      const tx = db.transaction(RECORD_STORE, 'readonly');
+      const rows = await requestValue(tx.objectStore(RECORD_STORE).getAll());
+      return summarizeInspectionViews(rows, {sourceType});
     },
     async get(id) {
       const tx = db.transaction([RECORD_STORE,SOURCE_STORE,OVERLAY_STORE], 'readonly');
@@ -119,17 +144,23 @@ export function createInspectionRepository({db, cryptoImpl = globalThis.crypto} 
     async remove(id) {
       if (typeof id !== 'string' || !id) throw new TypeError('Inspection ID required');
       const tx = db.transaction([RECORD_STORE,SOURCE_STORE,OVERLAY_STORE], 'readwrite');
-      return txResult(tx, done => {
+      return txResult(tx, (done, fail) => {
         const records = tx.objectStore(RECORD_STORE);
         const get = records.get(id);
         get.onsuccess = () => {
           const record = get.result;
           if (!record) {done(false); return;}
-          const others = records.index('bySource').getAllKeys(record.sourceId);
+          const others = records.index('bySource').getAll(record.sourceId);
           others.onsuccess = () => {
+            // Do not leave an immutable child record referencing a deleted parent.
+            // The UI should delete the most recent reinspection first.
+            if (others.result.some(row => row.reinspectionOf === id)) {
+              fail(new Error('연결된 재검사 기록이 남아 있습니다. 가장 최근 재검사부터 삭제해 주세요.'));
+              return;
+            }
             records.delete(id);
             tx.objectStore(OVERLAY_STORE).delete(id);
-            if (others.result.length === 1 && others.result[0] === id) tx.objectStore(SOURCE_STORE).delete(record.sourceId);
+            if (others.result.length === 1 && others.result[0].id === id) tx.objectStore(SOURCE_STORE).delete(record.sourceId);
             done(true);
           };
         };

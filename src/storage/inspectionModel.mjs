@@ -1,6 +1,6 @@
 /** Immutable local inspection snapshot contract. Images and heatmaps live in separate IDB stores. */
 import {validateRoiSelection} from '../ai/roiGeometry.mjs';
-export const INSPECTION_SCHEMA_VERSION = 2; // additive ROI transform, no IndexedDB store migration
+export const INSPECTION_SCHEMA_VERSION = 3; // additive lineage ID, no IndexedDB store migration
 export const CANDIDATE_CODES = Object.freeze(['normal_candidate', 'review_required', 'anomaly_candidate']);
 export const RECORD_STATUSES = Object.freeze(['inferred', 'held']);
 
@@ -23,7 +23,7 @@ function validateRoi(roi, width, height) {
  */
 export function createInspectionSnapshot({id, sourceId, createdAt, sourceType = 'user', status,
   width, height, roi = null, roiTransform = null, score = null, threshold = null, candidate = null, quality = null,
-  modelIds = [], elapsedMs = null, failureReasons = [], lotId = null, productId = null} = {}) {
+  modelIds = [], elapsedMs = null, failureReasons = [], lotId = null, productId = null, reinspectionOf = null} = {}) {
   if (!isText(id) || !isText(sourceId) || !isText(createdAt) || !Number.isFinite(Date.parse(createdAt))) {
     throw new TypeError('Inspection requires id, sourceId, and valid timestamp');
   }
@@ -39,6 +39,7 @@ export function createInspectionSnapshot({id, sourceId, createdAt, sourceType = 
       !Array.isArray(failureReasons) || !failureReasons.every(isText)) throw new TypeError('Invalid model IDs or reasons');
   if (lotId !== null && !isText(lotId)) throw new TypeError('Invalid lot ID');
   if (productId !== null && !isText(productId)) throw new TypeError('Invalid product ID');
+  if (reinspectionOf !== null && (!isText(reinspectionOf) || reinspectionOf === id)) throw new TypeError('Invalid reinspection reference');
   if (status === 'inferred') {
     if (score === null || !roi || !candidate || !CANDIDATE_CODES.includes(candidate.code) ||
         candidate.isFinalVerdict !== false || !Array.isArray(candidate.reasonCodes) ||
@@ -77,22 +78,22 @@ export function createInspectionSnapshot({id, sourceId, createdAt, sourceType = 
       qualityVerifiedForClassification: false, // never auto-promote heuristic precheck
       policyKind: String(quality.policyKind ?? 'uncalibrated')} : null,
     modelIds: [...modelIds], elapsedMs, failureReasons: [...failureReasons],
-    lotId, productId, humanVerdict: null, // human review is a separate later audited action
+    lotId, productId, reinspectionOf, humanVerdict: null, // human review is a separate later audited action
   };
 }
 
-export function createInferredSnapshot({id, sourceId, createdAt, sourceType, inference, lotId, productId}) {
+export function createInferredSnapshot({id, sourceId, createdAt, sourceType, inference, lotId, productId, reinspectionOf = null}) {
   if (!inference || !inference.candidate) throw new TypeError('AI inference result missing');
-  return createInspectionSnapshot({id, sourceId, createdAt, sourceType, lotId, productId,
+  return createInspectionSnapshot({id, sourceId, createdAt, sourceType, lotId, productId, reinspectionOf,
     status:'inferred', width:inference.width, height:inference.height, roi:inference.crop,
     roiTransform:inference.roiTransform ?? null,
     score:inference.score, threshold:inference.threshold, candidate:inference.candidate,
     quality:inference.quality, modelIds:inference.modelIds, elapsedMs:inference.elapsedMs });
 }
 
-export function createHeldSnapshot({id, sourceId, createdAt, sourceType, width, height, report, lotId, productId}) {
+export function createHeldSnapshot({id, sourceId, createdAt, sourceType, width, height, report, lotId, productId, reinspectionOf = null}) {
   const reasons = report?.reasonCodes?.filter(isText);
   if (!Array.isArray(reasons) || reasons.length === 0) throw new TypeError('Hold report must contain reasons');
-  return createInspectionSnapshot({id, sourceId, createdAt, sourceType, lotId, productId,
+  return createInspectionSnapshot({id, sourceId, createdAt, sourceType, lotId, productId, reinspectionOf,
     status:'held', width, height, failureReasons:reasons, quality:report});
 }
