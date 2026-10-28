@@ -4,6 +4,7 @@ import { validateFeatureTensor, parseModelOutputs } from './modelContract.mjs';
 import { fetchVerifiedModelAsset, MODEL_REVISION } from './modelAssets.mjs';
 import { assessCandidate } from './candidateDecision.mjs';
 import { assessImageQuality, assertImageQuality, inspectImageInput, inspectImageDimensions, ImageQualityHoldError } from './imageQuality.mjs';
+import { applySourceToModelCanvas, applyModelToSourceCanvas, validateRoiSelection } from './roiGeometry.mjs';
 
 export { MODEL_REPOSITORY, MODEL_REVISION } from './modelAssets.mjs';
 
@@ -13,6 +14,7 @@ const STD = [0.229, 0.224, 0.225] as const;
 
 type Normalization = { min: number; max: number; values: Float32Array };
 export type Crop = { x: number; y: number; width: number; height: number };
+export type RoiSelection = Crop & { rotationDegrees?: number };
 export type InferenceResult = {
   score: number;
   threshold: number | null;
@@ -20,6 +22,7 @@ export type InferenceResult = {
   quality: ReturnType<typeof assessImageQuality>;
   map: Normalization;
   crop: Crop;
+  roiTransform: RoiSelection & { source: 'center_preflight' | 'user_selected_unverified'; modelSize: number };
   width: number;
   height: number;
   elapsedMs: number;
@@ -97,17 +100,30 @@ export function releaseModel(): Promise<void> {
 }
 
 /** This is ONLY a reference crop for ONNX feasibility. Object detection is not yet wired. */
-async function preprocess(bitmap: ImageBitmap): Promise<{ tensor: ort.Tensor; crop: Crop; quality: ReturnType<typeof assessImageQuality> }> {
-  const crop = centerCropRect(bitmap.width, bitmap.height);
+async function preprocess(bitmap: ImageBitmap, selectedRoi: RoiSelection | null): Promise<{ tensor: ort.Tensor; crop: Crop; roiTransform: InferenceResult['roiTransform']; quality: ReturnType<typeof assessImageQuality> }> {
+  const center = centerCropRect(bitmap.width, bitmap.height);
+  // A detector or the user can specify a source-image ROI; this option is NOT
+  // equivalent to domain validation or independently verified ROI selection.
+  const crop = selectedRoi ? validateRoiSelection(selectedRoi, bitmap.width, bitmap.height) : center;
+  const roiTransform = {
+    ...crop, rotationDegrees: selectedRoi?.rotationDegrees ?? 0,
+    source: (selectedRoi ? 'user_selected_unverified' : 'center_preflight') as 'center_preflight' | 'user_selected_unverified',
+    modelSize: MODEL_SIZE,
+  };
   const canvas = document.createElement('canvas');
   canvas.width = MODEL_SIZE;
   canvas.height = MODEL_SIZE;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('Canvas 2D is unavailable');
-  ctx.drawImage(bitmap, crop.x, crop.y, crop.width, crop.height, 0, 0, MODEL_SIZE, MODEL_SIZE);
+  ctx.save();
+  applySourceToModelCanvas(ctx, roiTransform, MODEL_SIZE);
+  ctx.drawImage(bitmap, 0, 0);
+  ctx.restore();
   const pixels = ctx.getImageData(0, 0, MODEL_SIZE, MODEL_SIZE).data;
   const quality = assessImageQuality({ width: bitmap.width, height: bitmap.height,
-    rgba: pixels, analysisWidth: MODEL_SIZE, analysisHeight: MODEL_SIZE });
+    rgba: pixels, analysisWidth: MODEL_SIZE, analysisHeight: MODEL_SIZE,
+    roiWidth:crop.width, roiHeight:crop.height,
+    policyKind:selectedRoi ? 'uncalibrated_selected_roi_preflight' : 'uncalibrated_center_crop_preflight' });
   // Do not download models or issue ONNX inference on unusable photos.
   assertImageQuality(quality);
   const numPixels = MODEL_SIZE * MODEL_SIZE;
@@ -117,10 +133,11 @@ async function preprocess(bitmap: ImageBitmap): Promise<{ tensor: ort.Tensor; cr
       data[c * numPixels + p] = ((pixels[p * 4 + c] / 255) - MEAN[c]) / STD[c];
     }
   }
-  return { tensor: new ort.Tensor('float32', data, [1, 3, MODEL_SIZE, MODEL_SIZE]), crop, quality };
+  return { tensor: new ort.Tensor('float32', data, [1, 3, MODEL_SIZE, MODEL_SIZE]), crop, roiTransform, quality };
 }
 
-export function runMetalNutPreflight(image: File): Promise<InferenceResult> {
+/** Optional roi must use original bitmap coordinates. A manual ROI does not authorize normal pass. */
+export function runMetalNutPreflight(image: File, options: { roi?: RoiSelection | null } = {}): Promise<InferenceResult> {
   return enqueueModelOperation(async () => {
     const started = performance.now();
     // File-level errors and visible quality holds are explicit, recoverable
@@ -134,7 +151,7 @@ export function runMetalNutPreflight(image: File): Promise<InferenceResult> {
     }
     try {
       assertImageQuality(inspectImageDimensions(bitmap.width, bitmap.height));
-      const { tensor, crop, quality } = await preprocess(bitmap);
+      const { tensor, crop, roiTransform, quality } = await preprocess(bitmap, options.roi ?? null);
       const { backbone, knn } = await getSessions();
       const features = await backbone.run({ image: tensor });
       const featureTensor = validateFeatureTensor(features[backbone.outputNames[0]]);
@@ -143,10 +160,10 @@ export function runMetalNutPreflight(image: File): Promise<InferenceResult> {
       const map = normalizeAnomalyMap(raw);
       return {
         score, threshold: await threshold(),
-        // Preflight only uses a center crop. No verified object ROI, domain
-        // suitability, or field calibration: the candidate MUST stay pending.
+        // Preflight uses either a center or unverified selected ROI. No validated domain
+        // suitability, verified ROI, or field calibration: classification stays pending.
         candidate: assessCandidate({ score, modelRevision: MODEL_REVISION }),
-        quality, map, crop,
+        quality, map, crop, roiTransform,
         width: bitmap.width, height: bitmap.height,
         elapsedMs: Math.round(performance.now() - started),
         modelIds: [`backbone.onnx@${MODEL_REVISION}`, `knn_metal_nut.onnx@${MODEL_REVISION}`],
@@ -156,7 +173,7 @@ export function runMetalNutPreflight(image: File): Promise<InferenceResult> {
 }
 
 /** Draw local-contrast heatmap in the original photo coordinate system. */
-export async function makeOverlay(image: File, result: InferenceResult): Promise<string> {
+async function renderOverlayCanvas(image: File, result: InferenceResult): Promise<HTMLCanvasElement> {
   const bitmap = await createImageBitmap(image, { imageOrientation: 'from-image' });
   try {
     const canvas = document.createElement('canvas');
@@ -177,7 +194,24 @@ export async function makeOverlay(image: File, result: InferenceResult): Promise
       pixels.data[i * 4 + 3] = Math.round(180 * v);
     }
     hctx.putImageData(pixels, 0, 0);
-    ctx.drawImage(heat, result.crop.x, result.crop.y, result.crop.width, result.crop.height);
-    return canvas.toDataURL('image/png');
+    ctx.save();
+    applyModelToSourceCanvas(ctx, result.roiTransform ?? {...result.crop,rotationDegrees:0}, MODEL_SIZE);
+    ctx.drawImage(heat,0,0);
+    ctx.restore();
+    return canvas;
   } finally { bitmap.close(); }
+}
+
+/** Compatibility for the original preflight UI. Do not use this base64 path for storage. */
+export async function makeOverlay(image: File, result: InferenceResult): Promise<string> {
+  return (await renderOverlayCanvas(image, result)).toDataURL('image/png');
+}
+
+/** Lower-memory overlay encoding for long-term IndexedDB storage. */
+export async function makeOverlayBlob(image: File, result: InferenceResult): Promise<Blob> {
+  const canvas = await renderOverlayCanvas(image, result);
+  return new Promise((resolve, reject) => canvas.toBlob(blob => {
+    if (blob && blob.size > 0 && blob.type === 'image/png') resolve(blob);
+    else reject(new Error('Heatmap PNG encoding failed'));
+  }, 'image/png'));
 }

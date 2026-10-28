@@ -23,6 +23,7 @@ export const IMAGE_QUALITY_POLICY = Object.freeze({
 export const QUALITY_REASON_MESSAGES = Object.freeze({
   invalid_image_dimensions: '이미지 크기 정보를 확인할 수 없습니다. 다시 촬영하거나 다른 파일을 사용해 주세요.',
   unsupported_resolution: '해상도가 부족합니다. 더 가까이에서 선명하게 다시 촬영해 주세요.',
+  roi_insufficient_resolution: '선택한 너트 영역의 해상도가 부족합니다. 가까이서 다시 촬영하거나 큰 영역을 선택해 주세요.',
   excessive_resolution: '이미지가 너무 커서 안전하게 분석할 수 없습니다. 원본을 별도로 보관하고 크기를 줄여 주세요.',
   pixel_data_unavailable: '이미지 픽셀을 읽지 못했습니다. 다른 이미지로 다시 시도해 주세요.',
   underexposed: '이미지가 지나치게 어둡습니다. 조명을 개선하고 다시 촬영해 주세요.',
@@ -47,7 +48,7 @@ export class ImageQualityHoldError extends Error {
   }
 }
 
-function makeReport(reasonCodes, measurements = null) {
+function makeReport(reasonCodes, measurements = null, policyKind = 'uncalibrated_center_crop_preflight') {
   const unique = [...new Set(reasonCodes)];
   return Object.freeze({
     status: unique.length ? 'hold' : 'preflight_ok',
@@ -55,7 +56,7 @@ function makeReport(reasonCodes, measurements = null) {
     measurements: measurements ? Object.freeze(measurements) : null,
     qualityVerifiedForClassification: false,
     requiresHumanReview: true,
-    policyKind: 'uncalibrated_center_crop_preflight',
+    policyKind,
   });
 }
 
@@ -81,21 +82,24 @@ export function inspectImageDimensions(width, height) {
 
 /**
  * @param {{width:number, height:number, rgba:Uint8Array|Uint8ClampedArray,
- *   analysisWidth:number, analysisHeight:number}} image
+ *   analysisWidth:number, analysisHeight:number, roiWidth?:number, roiHeight?:number, policyKind?:string}} image
  * width/height = original image resolution. rgba = already center-cropped
  * 224x224 preview, NOT the full-resolution source (avoid huge pixel copies).
  */
 export function assessImageQuality(image = {}) {
-  const {width, height, rgba, analysisWidth, analysisHeight} = image;
+  const {width, height, rgba, analysisWidth, analysisHeight, roiWidth=null, roiHeight=null, policyKind='uncalibrated_center_crop_preflight'} = image;
   const dimensionReport = inspectImageDimensions(width, height);
   if (dimensionReport.reasonCodes.includes('invalid_image_dimensions')) return dimensionReport;
   const reasons = [...dimensionReport.reasonCodes];
+  if (roiWidth !== null && roiHeight !== null && (Math.min(roiWidth,roiHeight) < 224)) {
+    reasons.push('roi_insufficient_resolution');
+  }
   if (!Number.isSafeInteger(analysisWidth) || !Number.isSafeInteger(analysisHeight) ||
       analysisWidth < 3 || analysisHeight < 3 ||
       !((rgba instanceof Uint8Array) || (rgba instanceof Uint8ClampedArray)) ||
       rgba.length !== analysisWidth * analysisHeight * 4) {
     reasons.push('pixel_data_unavailable');
-    return makeReport(reasons);
+    return makeReport(reasons, null, policyKind);
   }
   const n = analysisWidth * analysisHeight;
   const lum = new Float32Array(n);
@@ -136,7 +140,7 @@ export function assessImageQuality(image = {}) {
     sourceWidth: width, sourceHeight: height, analysisWidth, analysisHeight,
     meanLuminance, contrastStd, laplacianVariance,
     darkFraction, brightFraction, transparentFraction,
-  });
+  }, policyKind);
 }
 
 /** A blocked precheck has no valid AI anomaly score or inferred defect label. */

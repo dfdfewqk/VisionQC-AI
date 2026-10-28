@@ -1,5 +1,6 @@
 /** Immutable local inspection snapshot contract. Images and heatmaps live in separate IDB stores. */
-export const INSPECTION_SCHEMA_VERSION = 1;
+import {validateRoiSelection} from '../ai/roiGeometry.mjs';
+export const INSPECTION_SCHEMA_VERSION = 2; // additive ROI transform, no IndexedDB store migration
 export const CANDIDATE_CODES = Object.freeze(['normal_candidate', 'review_required', 'anomaly_candidate']);
 export const RECORD_STATUSES = Object.freeze(['inferred', 'held']);
 
@@ -21,7 +22,7 @@ function validateRoi(roi, width, height) {
  * @param {object} input
  */
 export function createInspectionSnapshot({id, sourceId, createdAt, sourceType = 'user', status,
-  width, height, roi = null, score = null, threshold = null, candidate = null, quality = null,
+  width, height, roi = null, roiTransform = null, score = null, threshold = null, candidate = null, quality = null,
   modelIds = [], elapsedMs = null, failureReasons = [], lotId = null, productId = null} = {}) {
   if (!isText(id) || !isText(sourceId) || !isText(createdAt) || !Number.isFinite(Date.parse(createdAt))) {
     throw new TypeError('Inspection requires id, sourceId, and valid timestamp');
@@ -46,6 +47,19 @@ export function createInspectionSnapshot({id, sourceId, createdAt, sourceType = 
     if (score !== null || threshold !== null || roi !== null || candidate !== null || modelIds.length || elapsedMs !== null ||
         failureReasons.length === 0) throw new TypeError('Held image cannot have a fabricated AI inference');
   }
+  let safeTransform = null;
+  if (roiTransform !== null) {
+    if (status !== 'inferred' || !roi || !['center_preflight','user_selected_unverified'].includes(roiTransform.source) ||
+      roiTransform.modelSize !== 224) {
+      throw new TypeError('ROI transform must describe an inferred, known-model crop');
+    }
+    const selected = validateRoiSelection(roiTransform, width, height);
+    if (![roi.x,roi.y,roi.width,roi.height].every((v,i)=>v ===
+        [selected.x,selected.y,selected.width,selected.height][i])) {
+      throw new TypeError('ROI transform differs from stored crop');
+    }
+    safeTransform = { ...selected, source:roiTransform.source, modelSize:224 };
+  }
   const safeCandidate = candidate ? {
     code: candidate.code,
     label: ['정상 후보','확인 필요','이상 후보'][CANDIDATE_CODES.indexOf(candidate.code)],
@@ -56,7 +70,7 @@ export function createInspectionSnapshot({id, sourceId, createdAt, sourceType = 
   } : null;
   return {
     schemaVersion: INSPECTION_SCHEMA_VERSION, id, sourceId, sourceType, createdAt, status,
-    width, height, roi: roi ? validateRoi(roi, width, height) : null, score, threshold,
+    width, height, roi: roi ? validateRoi(roi, width, height) : null, roiTransform:safeTransform, score, threshold,
     candidate: safeCandidate,
     quality: quality ? {status: String(quality.status ?? 'unknown'),
       reasonCodes: Array.isArray(quality.reasonCodes) ? quality.reasonCodes.filter(isText) : [],
@@ -71,6 +85,7 @@ export function createInferredSnapshot({id, sourceId, createdAt, sourceType, inf
   if (!inference || !inference.candidate) throw new TypeError('AI inference result missing');
   return createInspectionSnapshot({id, sourceId, createdAt, sourceType, lotId, productId,
     status:'inferred', width:inference.width, height:inference.height, roi:inference.crop,
+    roiTransform:inference.roiTransform ?? null,
     score:inference.score, threshold:inference.threshold, candidate:inference.candidate,
     quality:inference.quality, modelIds:inference.modelIds, elapsedMs:inference.elapsedMs });
 }

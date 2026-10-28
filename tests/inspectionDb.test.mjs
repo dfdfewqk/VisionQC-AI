@@ -4,6 +4,7 @@ import {webcrypto} from 'node:crypto';
 import {indexedDB} from 'fake-indexeddb';
 import {openInspectionDatabase,createInspectionRepository,explainStorageError} from '../src/storage/inspectionDb.mjs';
 import {createInspectionSnapshot} from '../src/storage/inspectionModel.mjs';
+import {createInspectionService} from '../src/ai/inspectionService.mjs';
 
 let counter=0;
 async function createRepo() {
@@ -78,4 +79,28 @@ test('deleting a nonexistent record is safe and does not change existing records
 test('storage quota error is actionable and never promises silent data cleanup',()=>{
  assert.match(explainStorageError({name:'QuotaExceededError'}),/자동 삭제하지/);
  assert.match(explainStorageError({name:'ConstraintError'}),/덮어쓰지/);
+});
+
+test('inference-to-IDB integration persists selected rotated ROI, shares source across multiple crops, and reloads',async()=>{
+ const repo=await createRepo();const file=photo('camera image');let n=0;
+ const service=createInspectionService({repository:repo,
+   uuid:()=>`scan-${++n}`,clock:()=> '2026-10-28T08:20:00Z',
+   infer:async(f,options)=>{
+    const r=options.roi;
+    return {width:1024,height:768,crop:{x:r.x,y:r.y,width:r.width,height:r.height},
+      roiTransform:{...r,source:'user_selected_unverified',modelSize:224},
+      score:1.8,threshold:null,modelIds:['pinned-model'],elapsedMs:42,
+      quality:{status:'preflight_ok',qualityVerifiedForClassification:false},
+      candidate:{code:'review_required',isFinalVerdict:false,reasonCodes:['roi_unverified']}};
+   }});
+ const a={x:100,y:100,width:300,height:280,rotationDegrees:15};
+ const b={x:550,y:160,width:224,height:224,rotationDegrees:0};
+ const first=await service.inspectAndSave({file,roi:a});
+ const second=await service.inspectAndSave({file,roi:b});
+ assert.notEqual(first.id,second.id);
+ assert.equal(first.sourceId,second.sourceId);
+ assert.deepEqual((await repo.get(first.id)).inspection.roiTransform,{...a,source:'user_selected_unverified',modelSize:224});
+ assert.equal((await repo.get(second.id)).inspection.candidate.code,'review_required');
+ await repo.remove(first.id);assert.ok((await repo.get(second.id)).source.blob);
+ repo.close();
 });

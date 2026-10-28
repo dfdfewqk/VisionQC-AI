@@ -42,7 +42,10 @@ export function openInspectionDatabase({indexedDB = globalThis.indexedDB, name =
       }
       if (!db.objectStoreNames.contains(OVERLAY_STORE)) db.createObjectStore(OVERLAY_STORE, {keyPath:'inspectionId'});
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      request.result.onversionchange = () => request.result.close();
+      resolve(request.result);
+    };
     request.onerror = () => reject(request.error ?? new Error('IndexedDB 열기 실패'));
     request.onblocked = () => reject(new Error('다른 탭이 저장소 업데이트를 막고 있습니다. 해당 탭을 닫아 주세요.'));
   });

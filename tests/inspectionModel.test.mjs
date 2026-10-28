@@ -59,3 +59,24 @@ test('quality hold persists as held without false AI score, but model failure ne
  await assert.rejects(()=>fail.inspectAndSave({file:new Blob(['something'],{type:'image/png'})}),/ONNX crashed/);
  assert.equal(saved.length,1);
 });
+test('ROI inference snapshot preserves reviewed geometry transform without automatic approval',()=>{
+ const roi={x:100,y:200,width:280,height:230,rotationDegrees:15,source:'user_selected_unverified',modelSize:224};
+ const inference={width:1400,height:950,crop:{x:100,y:200,width:280,height:230},roiTransform:roi,
+  score:2,threshold:null,candidate:{code:'review_required',isFinalVerdict:false,reasonCodes:['roi_unverified']},
+  quality:{status:'preflight_ok'},modelIds:['model'],elapsedMs:18};
+ const saved=createInferredSnapshot({id:'rotated',sourceId:'sha256:abc',createdAt:'2026-10-28T07:00:00Z',inference});
+ assert.deepEqual(saved.roiTransform,roi);assert.equal(saved.schemaVersion,2);assert.equal(saved.humanVerdict,null);
+ assert.throws(()=>createInspectionSnapshot({...saved,roiTransform:{...roi,rotationDegrees:181}}),/rotation|valid/);
+ assert.throws(()=>createInspectionSnapshot({...saved,roiTransform:{...roi,x:99}}),/differs/);
+});
+test('inspection adapter forwards optional ROI without treating it as verified',async()=>{
+ const saved=[];let seen;
+ const repository={fingerprint:async()=> 'sha256:test',save:async entry=>{saved.push(entry);}};
+ const service=createInspectionService({repository,infer:async(file,options)=>{
+  seen=options;return {width:1000,height:700,crop:{x:100,y:80,width:240,height:240},score:2.1,
+  threshold:null,candidate:{code:'review_required',isFinalVerdict:false,reasonCodes:['roi_unverified']},modelIds:['v1'],elapsedMs:15};
+ },uuid:()=> 'roi-pass',clock:()=> '2026-10-28T07:00:00Z'});
+ const roi={x:100,y:80,width:240,height:240};
+ await service.inspectAndSave({file:new Blob(['content'],{type:'image/png'}),roi});
+ assert.deepEqual(seen,{roi});assert.equal(saved.length,1);
+});

@@ -6,7 +6,7 @@ const makeId = () => globalThis.crypto.randomUUID();
 /**
  * Only capture a return value once persistence transaction successfully commits.
  * @param {{repository: {fingerprint: (file: Blob)=>Promise<string>, save: (args: any)=>Promise<any>},
- *   infer: (file: File)=>Promise<any>,
+ *   infer: (file: File, options?: {roi?: any|null})=>Promise<any>,
  *   renderOverlay?: ((file: File, inference: any)=>Promise<Blob>)|null,
  *   uuid?: ()=>string, clock?: ()=>string}} options
  */
@@ -16,14 +16,14 @@ export function createInspectionService({repository, infer, renderOverlay = null
     throw new TypeError('Repository fingerprint/save and AI inference functions are required');
   }
   return {
-    async inspectAndSave({file, sourceType = 'user', lotId = null, productId = null} = {}) {
+    async inspectAndSave({file, sourceType = 'user', lotId = null, productId = null, roi = null} = {}) {
       // Source hash computation occurs before inference, ensuring exact photo-identity linkage.
       const sourceId = await repository.fingerprint(file);
       const id = uuid();
       const createdAt = clock();
       let snapshot, overlay = null;
       try {
-        const inference = await infer(file);
+        const inference = await infer(file, {roi});
         snapshot = createInferredSnapshot({id,sourceId,createdAt,sourceType,lotId,productId,inference});
         if (renderOverlay) overlay = await renderOverlay(file,inference);
       } catch (error) {
