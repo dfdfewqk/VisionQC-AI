@@ -52,6 +52,7 @@ export function openInspectionDatabase({indexedDB = globalThis.indexedDB, name =
  * Inject dependencies to test actual transaction behavior without browser hardware.
  * Save is atomic: original + immutable ROI inspection + optional overlay commit together.
  */
+/** @param {{db: IDBDatabase, cryptoImpl?: Crypto}} options */
 export function createInspectionRepository({db, cryptoImpl = globalThis.crypto} = {}) {
   if (!db?.transaction) throw new TypeError('Open IndexedDB connection required');
   if (!cryptoImpl?.subtle?.digest) throw new TypeError('SHA-256 crypto support required');
