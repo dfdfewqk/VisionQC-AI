@@ -80,3 +80,20 @@ test('inspection adapter forwards optional ROI without treating it as verified',
  await service.inspectAndSave({file:new Blob(['content'],{type:'image/png'}),roi});
  assert.deepEqual(seen,{roi});assert.equal(saved.length,1);
 });
+
+test('persistent queue forwards a deterministic inspection ID to immutable snapshots',async()=>{
+ const saved=[];
+ const repository={fingerprint:async()=> 'sha256:test',save:async data=>saved.push(data)};
+ const service=createInspectionService({repository,infer:async()=>({width:900,height:900,
+  crop:{x:100,y:100,width:300,height:300},score:1,threshold:null,modelIds:['pinned'],elapsedMs:12,
+  candidate:{code:'review_required',isFinalVerdict:false,reasonCodes:['calibration_missing']}})});
+ const record=await service.inspectAndSave({file:new Blob(['f'],{type:'image/png'}),inspectionId:'qi-known'});
+ assert.equal(record.id,'qi-known');assert.equal(saved[0].snapshot.id,'qi-known');
+});
+test('unsafe persistent queue IDs are rejected before any inference or save',async()=>{
+ let called=false;
+ const repository={fingerprint:async()=> 'sha256:test',save:async()=>{called=true;}};
+ const service=createInspectionService({repository,infer:async()=>{called=true;}});
+ await assert.rejects(()=>service.inspectAndSave({file:new Blob(['f'],{type:'image/png'}),inspectionId:'../../id'}),/ID/);
+ assert.equal(called,false);
+});

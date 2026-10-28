@@ -3,10 +3,11 @@ import {createInspectionSnapshot} from './inspectionModel.mjs';
 import {findMatchingSourceViews, summarizeInspectionViews, validateReinspection} from './inspectionLineage.mjs';
 
 export const DEFAULT_DB_NAME = 'visionqc-inspections-v1';
-export const DB_VERSION = 1;
+export const DB_VERSION = 2; // additive durable inspection queue; preserves v1 stores
 const SOURCE_STORE = 'sourceImages';
 const RECORD_STORE = 'inspections';
 const OVERLAY_STORE = 'heatmaps';
+const QUEUE_STORE = 'inspectionQueue';
 const VALID_MIME = new Set(['image/png','image/jpeg','image/webp']);
 
 function errorMessage(error) { return error instanceof Error ? error.message : String(error); }
@@ -42,6 +43,7 @@ export function openInspectionDatabase({indexedDB = globalThis.indexedDB, name =
         records.createIndex('byCreatedAt', 'createdAt', {unique:false});
       }
       if (!db.objectStoreNames.contains(OVERLAY_STORE)) db.createObjectStore(OVERLAY_STORE, {keyPath:'inspectionId'});
+      if (!db.objectStoreNames.contains(QUEUE_STORE)) db.createObjectStore(QUEUE_STORE, {keyPath:'id'});
     };
     request.onsuccess = () => {
       request.result.onversionchange = () => request.result.close();

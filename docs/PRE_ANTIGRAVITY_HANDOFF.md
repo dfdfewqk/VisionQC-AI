@@ -66,3 +66,14 @@ await service.close(); // 진행 중 검사/저장 완료까지 대기한 뒤 DB
 - 구현/자동 CI 확인: Node 단위 테스트, fake-indexeddb 트랜잭션 검증, TypeScript/Vite 빌드 (실제 CI 결과에 한해서 완료로 기록).
 - 아직 필요한 Antigravity 작업: 자동 너트 탐지와 ROI 확인, 카메라·화면, 브라우저로 실제 ONNX 추론/저장/검사 연계 실측.
 - 이후 확정된 후속 작업(삭제된 것이 아님): 검토 감사 기록, LOT, PDF/CSV 보고서, 백업/복원, AI 재분석, 통계 대시보드, DeepSeek 관리자 분석.
+
+## 브라우저 검사 대기열 및 수동 복구 (ChatGPT 선행 추가)
+
+- IndexedDB v2는 기존 v1의 원본·검사·히트맵 저장소를 변경하지 않고 `inspectionQueue`를 추가한다. 큐는 사진 Blob과 사용자가 선택한 ROI·LOT·제품번호·재검사 원본을 보존한다. 페이지 종료나 새로고침을 해도 대기열이 삭제되지 않는다.
+- `openBrowserInspectionService()`를 열면 이전 `running` 작업은 `interrupted`로 기록된다. **절대로 자동으로 재실행하지 않는다.** 화면에 `listInspectionQueue()` 결과를 표시한 후 사용자가 명시적으로 `startInspectionQueue()`를 눌러 재개한다.
+- 사용법: `await service.enqueueInspection({file,roi,sourceType:'user'})`; 작업 실행/수동 복구는 `await service.startInspectionQueue()`; 이력 조회 `await service.listInspectionQueue()`; 사용자가 취소에 동의하면 `await service.cancelQueuedInspection(id)`. 개별 이미지 실패는 원본 보관(`failed_image`) 및 사용자 명시 재시도 `retryFailedQueueImage(id)`를 제공한다.
+- 현재 검사가 실행 중인 경우 최대 **대기 사진 한 장**만 등록할 수 있다. 처음부터 검사 시작 전에 대기열에 두 장을 넣는 것은 허용하지 않는다. `inspection_queue_full`을 잡아 안내한다. 한 번에 검사 실행은 오직 한 장이며 `startInspectionQueue()`를 중복 클릭해도 실행 엔진은 공유된다.
+- `ImageQualityHoldError`는 기존 검사 결과 `held`로 저장하고 다음 검사로 진행한다. 이미지 해독 오류처럼 파일 자체에 한정된 실패는 해당 사진만 `failed_image`로 기록하고 다음 사진으로 간다. 모델 다운로드·WASM·IndexedDB 오류는 `paused_system`으로 멈추고 나머지 대기 사진은 유지한다.
+- 재시작 복구 시 큐 작업 ID를 **불변 검사 ID**로 사용한다. 검사 저장만 성공하고 큐 완료 업데이트 전에 브라우저가 닫힌 경우 기존 ID를 조회해 저장된 결과를 확인한 후 **중복 ONNX 추론 및 중복 검사 기록 생성 없이** 큐를 `completed`로 복구한다.
+- 완료된 검사 사진은 검사 원본 저장소에 있으므로 큐의 보조 Blob 참조를 비운다. 실패/중단된 사진은 복구 전까지 큐에 남아 있다. 모델 오류를 이미지 오류나 제품 불량으로 표기하지 않는다.
+- CI/fake-indexeddb 테스트는 브라우저 IndexedDB 계약을 검증할 뿐 **실제 Chrome 종료·복원 UI, 카메라 및 모델 ONNX 실행 성공**을 입증하지 않는다. Antigravity가 연결 후 실제 새로고침·닫기·복구를 검증해야 한다.
