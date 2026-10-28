@@ -16,10 +16,16 @@ export function createInspectionService({repository, infer, renderOverlay = null
     throw new TypeError('Repository fingerprint/save and AI inference functions are required');
   }
   return {
-    async inspectAndSave({file, sourceType = 'user', lotId = null, productId = null, roi = null, reinspectionOf = null} = {}) {
+    async inspectAndSave({file, sourceType = 'user', lotId = null, productId = null, roi = null, reinspectionOf = null, inspectionId = null} = {}) {
       // Source hash computation occurs before inference, ensuring exact photo-identity linkage.
       const sourceId = await repository.fingerprint(file);
-      const id = uuid();
+      // Persistent queue job ID is also the immutable inspection ID. If a crash
+      // occurs after saving but before marking its job complete, recovery can
+      // reconcile without creating a duplicate inspection record.
+      if (inspectionId !== null && (typeof inspectionId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(inspectionId))) {
+        throw new TypeError('Invalid persistent inspection ID');
+      }
+      const id = inspectionId ?? uuid();
       const createdAt = clock();
       let snapshot, overlay = null;
       try {

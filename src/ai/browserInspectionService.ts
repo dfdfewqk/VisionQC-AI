@@ -4,6 +4,8 @@ import {createInspectionService} from './inspectionService.mjs';
 import {createManagedInspectionService} from './serviceLifecycle.mjs';
 import {openInspectionDatabase, createInspectionRepository} from '../storage/inspectionDb.mjs';
 import {acquireInspectionTabLock} from '../storage/inspectionLock.mjs';
+import {createInspectionQueueRepository} from '../storage/inspectionQueueDb.mjs';
+import {createInspectionQueueRunner} from './inspectionQueue.mjs';
 
 /**
  * Open an exclusive session, usable in secure browser contexts only.
@@ -19,6 +21,12 @@ export async function openBrowserInspectionService() {
     db = opened;
     const repository = createInspectionRepository({db: opened});
     const service = createInspectionService({repository, infer:runMetalNutPreflight, renderOverlay:makeOverlayBlob});
+    const queue = createInspectionQueueRepository({db:opened});
+    // No automatic run on page load. Interrupted work survives and needs
+    // an explicit user action to resume after reviewing queue metadata.
+    await queue.recoverInterrupted();
+    const runner = createInspectionQueueRunner({queue,
+      inspectAndSave:service.inspectAndSave,findExisting:repository.get});
     const managed = createManagedInspectionService({
       methods: {
         inspectAndSave: service.inspectAndSave,
@@ -27,6 +35,11 @@ export async function openBrowserInspectionService() {
         remove: repository.remove,
         findDuplicates: repository.findDuplicates,
         statistics: repository.statistics,
+        enqueueInspection: queue.enqueue,
+        listInspectionQueue: queue.list,
+        startInspectionQueue: runner.runQueue,
+        cancelQueuedInspection: queue.cancel,
+        retryFailedQueueImage: queue.retryFailedImage,
       },
       dispose: async () => {
         try { repository.close(); }
