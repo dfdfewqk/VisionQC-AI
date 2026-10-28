@@ -95,3 +95,15 @@ test('no image input does not throw internal unhelpful TypeError',()=>{
   assert.deepEqual(inspectImageInput().reasonCodes,['unsupported_file_type','empty_file']);
   assert.equal(check().status,'hold');
 });
+
+test('a cropped ROI smaller than 224 source pixels is held even if the original image is large', () => {
+  const n = 224*224;
+  const rgba = new Uint8ClampedArray(n*4);
+  for(let i=0;i<n;i++) {rgba[i*4]=i%256;rgba[i*4+1]=(i*7)%256;rgba[i*4+2]=(i*13)%256;rgba[i*4+3]=255;}
+  const report=assessImageQuality({width:1200,height:800,rgba,analysisWidth:224,analysisHeight:224,
+    roiWidth:140,roiHeight:180,policyKind:'uncalibrated_selected_roi_preflight'});
+  assert.equal(report.status,'hold');
+  assert.ok(report.reasonCodes.includes('roi_insufficient_resolution'));
+  assert.equal(report.qualityVerifiedForClassification,false);
+  assert.equal(report.policyKind,'uncalibrated_selected_roi_preflight');
+});

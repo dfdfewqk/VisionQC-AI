@@ -11,7 +11,10 @@ const VALID_MIME = new Set(['image/png','image/jpeg','image/webp']);
 function errorMessage(error) { return error instanceof Error ? error.message : String(error); }
 function requestValue(request) {
   return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      request.result.onversionchange = () => request.result.close();
+      resolve(request.result);
+    };
     request.onerror = () => reject(request.error ?? new Error('IndexedDB request failed'));
   });
 }
