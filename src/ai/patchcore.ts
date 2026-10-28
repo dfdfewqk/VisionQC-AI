@@ -2,6 +2,7 @@ import * as ort from 'onnxruntime-web/wasm';
 import { centerCropRect, metalNutThreshold, normalizeAnomalyMap } from './geometry.mjs';
 import { validateFeatureTensor, parseModelOutputs } from './modelContract.mjs';
 import { fetchVerifiedModelAsset, MODEL_REVISION } from './modelAssets.mjs';
+import { assessCandidate } from './candidateDecision.mjs';
 
 export { MODEL_REPOSITORY, MODEL_REVISION } from './modelAssets.mjs';
 
@@ -14,6 +15,7 @@ export type Crop = { x: number; y: number; width: number; height: number };
 export type InferenceResult = {
   score: number;
   threshold: number | null;
+  candidate: ReturnType<typeof assessCandidate>;
   map: Normalization;
   crop: Crop;
   width: number;
@@ -125,7 +127,11 @@ export function runMetalNutPreflight(image: File): Promise<InferenceResult> {
       const { map: raw, score } = parseModelOutputs(outputs);
       const map = normalizeAnomalyMap(raw);
       return {
-        score, threshold: await threshold(), map, crop,
+        score, threshold: await threshold(),
+        // Preflight only uses a center crop. No verified object ROI, domain
+        // suitability, or field calibration: the candidate MUST stay pending.
+        candidate: assessCandidate({ score, modelRevision: MODEL_REVISION }),
+        map, crop,
         width: bitmap.width, height: bitmap.height,
         elapsedMs: Math.round(performance.now() - started),
         modelIds: [`backbone.onnx@${MODEL_REVISION}`, `knn_metal_nut.onnx@${MODEL_REVISION}`],
