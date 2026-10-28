@@ -1,7 +1,7 @@
 name: Verify VisionQC
 on:
   push:
-    branches: [main, develop, 'feature/**']
+    branches: [main, develop, 'feature/**', 'work/**', 'antigravity/**']
   pull_request:
     branches: [main, develop]
 jobs:
