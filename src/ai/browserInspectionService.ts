@@ -7,6 +7,7 @@ import {acquireInspectionTabLock} from '../storage/inspectionLock.mjs';
 import {createInspectionQueueRepository} from '../storage/inspectionQueueDb.mjs';
 import {createHumanReviewRepository} from '../storage/humanReviewDb.mjs';
 import {createInspectionHistoryRepository} from '../storage/inspectionHistoryDb.mjs';
+import {createLotProductRepository} from '../storage/lotProductDb.mjs';
 import {createInspectionQueueRunner} from './inspectionQueue.mjs';
 
 /**
@@ -26,6 +27,7 @@ export async function openBrowserInspectionService() {
     const queue = createInspectionQueueRepository({db:opened});
     const reviews = createHumanReviewRepository({db:opened});
     const history = createInspectionHistoryRepository({db:opened});
+    const identities = createLotProductRepository({db:opened});
     // No automatic run on page load. Interrupted work survives and needs
     // an explicit user action to resume after reviewing queue metadata.
     await queue.recoverInterrupted();
@@ -45,6 +47,18 @@ export async function openBrowserInspectionService() {
         summarizeHumanReviews: reviews.summary,
         searchInspectionHistory: history.search,
         qualityStatistics: history.qualityStatistics,
+        registerLot: identities.registerLot,
+        changeLot: identities.changeLot,
+        getLot: identities.getLot,
+        listLots: identities.listLots,
+        registerProduct: identities.registerProduct,
+        changeProduct: identities.changeProduct,
+        getProduct: identities.getProduct,
+        listProducts: identities.listProducts,
+        assignInspection: identities.assignInspection,
+        getInspectionIdentity: identities.getInspectionIdentity,
+        identityHistory: identities.history,
+        lotOverview: identities.lotOverview,
         enqueueInspection: queue.enqueue,
         listInspectionQueue: queue.list,
         startInspectionQueue: runner.runQueue,
