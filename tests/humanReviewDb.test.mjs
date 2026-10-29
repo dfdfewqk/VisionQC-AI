@@ -43,7 +43,7 @@ test('v2 -> v3 upgrade retains existing queue and inspection records',async()=>{
   tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error);
  });older.close();
  const db=await openInspectionDatabase({indexedDB,name});
- assert.equal(db.version,3);assert.equal(DB_VERSION,3);assert.ok(db.objectStoreNames.contains('humanReviewEvents'));
+ assert.equal(db.version,4);assert.equal(DB_VERSION,4);assert.ok(db.objectStoreNames.contains('humanReviewEvents'));
  const tx=db.transaction(['inspections','inspectionQueue'],'readonly');
  const results=await Promise.all(['inspections','inspectionQueue'].map(store=>new Promise((resolve,reject)=>{
   const q=tx.objectStore(store).getAll();q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error);
