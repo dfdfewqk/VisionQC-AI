@@ -18,6 +18,18 @@ try{
   await page.getByRole('button',{name:'카메라 끄기'}).click();
   await page.getByRole('button',{name:'촬영창 닫기'}).click();
   const file=page.locator('.file-drop input[type=file]');
+  // Local foreground segmentation proposes ROI, never claims trained nut identity.
+  const foreground=Buffer.from(await page.evaluate(()=>{
+    const canvas=document.createElement('canvas');canvas.width=512;canvas.height=512;
+    const ctx=canvas.getContext('2d');ctx.fillStyle='#efefef';ctx.fillRect(0,0,512,512);
+    ctx.fillStyle='#303030';ctx.beginPath();ctx.arc(256,256,142,0,Math.PI*2);ctx.fill();
+    return canvas.toDataURL('image/png').split(',')[1];
+  }),'base64');
+  await file.setInputFiles({name:'isolated-object.png',mimeType:'image/png',buffer:foreground});
+  await page.getByRole('button',{name:/후보 1/}).waitFor({timeout:15000});
+  await page.getByText(/선택 위치/).waitFor({timeout:15000});
+  await page.getByRole('button',{name:/후보 1/}).click();
+  await page.getByText(/제안 1번 영역을 선택했습니다/).waitFor();
   const png=Buffer.from(await page.evaluate(()=>{
     const canvas=document.createElement('canvas');canvas.width=320;canvas.height=320;const ctx=canvas.getContext('2d');
     const gradient=ctx.createLinearGradient(0,0,320,320);gradient.addColorStop(0,'#194477');gradient.addColorStop(1,'#d8eef8');
@@ -32,6 +44,8 @@ try{
   await page.mouse.move(stage.x+stage.width*0.91,stage.y+stage.height*0.91,{steps:9});
   await page.mouse.up();
   await page.getByText(/선택 위치/).waitFor();
+  // The ROI is editable without pretending a trained detector selected it.
+  await page.locator('.roi-coordinate-fields input').last().fill('0');
   // Insert a local data fixture in the real browser database; this verifies
   // the persisted-history and worker-review UI without faking a model score.
   await page.evaluate(async bytes=>{
@@ -67,5 +81,5 @@ try{
   await page.locator('.connection.good').waitFor({timeout:30000});
   await page.getByRole('button',{name:/검사 기록/}).click();
   await page.getByText('browser-smoke-001').waitFor({state:'detached',timeout:10000});
-  console.log('Browser smoke passed: camera permission, upload/ROI, IndexedDB history/detail, worker audit, stats, delete, reload.');
+  console.log('Browser smoke passed: camera, foreground proposals + manual ROI, IndexedDB history/detail, worker audit, stats, delete, reload.');
 }finally{await browser.close();}

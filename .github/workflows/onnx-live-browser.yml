@@ -4,6 +4,11 @@ on:
     branches: [develop]
     paths:
       - 'scripts/browser-onnx-smoke.mjs'
+      - 'src/main.tsx'
+      - 'src/components/**'
+      - 'src/detection/**'
+      - 'src/ai/patchcore.ts'
+      - 'vite.config.ts'
       - '.github/workflows/onnx-live-browser.yml'
   workflow_dispatch:
 permissions:

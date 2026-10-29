@@ -4,11 +4,13 @@ import {openBrowserInspectionService} from './ai/browserInspectionService';
 import {releaseModel, type RoiSelection} from './ai/patchcore';
 import RoiPicker from './components/RoiPicker';
 import CameraCapture from './camera/CameraCapture';
+import {suggestNutRois} from './detection/nutRoiCandidates.mjs';
 import './styles/main.css';
 
 type Page='inspect'|'history'|'metrics'|'registry';
 type Status='연결 중'|'준비'|'검사 중'|'오류';
 type InspectDetail={inspection:any;source:any;overlay:Blob|null};
+type SuggestedRoi=RoiSelection & {confidence:number;source:string};
 const PERIODS=[{code:'all',label:'전체'},{code:'today',label:'오늘'},{code:'7d',label:'7일'},{code:'30d',label:'30일'}];
 const LABELS:Record<string,string>={normal_candidate:'정상 후보',review_required:'확인 필요',anomaly_candidate:'이상 후보',
   inferred:'AI 검사 완료',held:'사진 품질 보류',normal:'정상',defective:'불량',reinspection:'재검사 요청',
@@ -24,6 +26,8 @@ function App(){
   const service=useRef<any>(null);
   const alive=useRef(true);
   const processing=useRef(false);
+  const autoRequest=useRef(0);
+  const manuallySelected=useRef(false);
   const [connected,setConnected]=useState<Status>('연결 중');
   const [page,setPage]=useState<Page>('inspect');
   const [notice,setNotice]=useState('저장소 연결 중입니다. 사진은 별도 서버에 업로드하지 않습니다.');
@@ -34,6 +38,8 @@ function App(){
   const [detailPhoto,setDetailPhoto]=useState('');
   const [detailHeat,setDetailHeat]=useState('');
   const [roi,setRoi]=useState<RoiSelection|null>(null);
+  const [suggestions,setSuggestions]=useState<SuggestedRoi[]>([]);
+  const [autoPending,setAutoPending]=useState(false);
   const [captureOpen,setCaptureOpen]=useState(false);
   const [busy,setBusy]=useState(false);
   const [queue,setQueue]=useState<any[]>([]);
@@ -108,18 +114,39 @@ function App(){
   async function changePeriod(p:string){setPeriod(p);setOffset(0);try{
     await Promise.all([reloadHistory(service.current,sourceType,p,humanFilter,0),reloadStats(service.current,sourceType,p)]);
   }catch(e){fail(e,'기간 조회 실패');}}
-  function selectFile(item:File|null){if(!item)return;
-    setDetail(null);setRoi(null);setReview(null);
+  async function selectFile(item:File|null):Promise<RoiSelection|null>{
+    if(!item)return null;
+    const requestId=++autoRequest.current;
+    manuallySelected.current=false;
+    setDetail(null);setRoi(null);setReview(null);setSuggestions([]);
     if(!['image/png','image/jpeg','image/webp'].includes(item.type)||item.size>40*1024*1024||item.size===0){
-      setNotice('JPEG/PNG/WebP, 40MB 이하의 사진 파일만 사용할 수 있습니다.');return;
+      setFile(null);setNotice('JPEG/PNG/WebP, 40MB 이하의 사진 파일만 사용할 수 있습니다.');return null;
     }
-    setFile(item);setNotice(`${item.name} 선택됨 · 너트 영역을 지정하거나 중앙 영역으로 검사할 수 있습니다.`);
+    setFile(item);setAutoPending(true);
+    setNotice(`${item.name} 선택됨 · 로컬에서 검사 영역 후보를 살펴보고 있습니다.`);
+    try{
+      const regions:SuggestedRoi[]=await suggestNutRois(item);
+      if(requestId!==autoRequest.current||!alive.current)return null;
+      setSuggestions(regions);
+      const best=regions[0]??null;
+      if(best&&!manuallySelected.current){
+        const {x,y,width,height,rotationDegrees}=best;
+        setRoi({x,y,width,height,rotationDegrees});
+        setNotice(`사진에서 ROI 후보 ${regions.length}개를 찾았습니다. 너트인지 직접 확인하거나 영역을 다시 선택하세요. (AI 탐지 인증 전)`);
+      }else if(!regions.length){
+        setNotice('자동 영역 후보를 찾지 못했습니다. 사진에서 너트 영역을 직접 지정하거나 중앙 사전검사를 이용하세요.');
+      }
+      return best;
+    }catch(error){
+      if(requestId===autoRequest.current){setNotice(`자동 영역 제안을 사용할 수 없습니다. 수동 선택은 가능합니다: ${errorText(error)}`);}
+      return null;
+    }finally{if(requestId===autoRequest.current)setAutoPending(false);}
   }
   async function showRecord(id:string){const s=service.current;if(!s)return;
     try{
       const [d,last,events,identity]=await Promise.all([s.get(id),s.latestHumanReview(id),s.listHumanReviewHistory(id),s.getInspectionIdentity(id)]);
       if(!d)throw new Error('검사 기록을 찾을 수 없습니다.');
-      setDetail(d);setFile(null);setRoi(null);setReview(last);setReviewHistory(events);setAssignment(identity);
+      setDetail(d);autoRequest.current++;setFile(null);setRoi(null);setSuggestions([]);setReview(last);setReviewHistory(events);setAssignment(identity);
       setVerdict(last?.verdict??'normal');setPage('inspect');setNotice(`검사 ${id} 상세 기록을 열었습니다.`);
     }catch(e){fail(e,'검사 기록 조회 실패');}
   }
@@ -141,7 +168,7 @@ function App(){
     }catch(e){if(alive.current)fail(e,'검사 실패 (저장 여부를 이력에서 확인하세요)');}
     finally{processing.current=false;if(alive.current){setBusy(false);setConnected('준비');}}
   }
-  async function onCapture(item:File){selectFile(item);setCaptureOpen(false);await runInspection(item,null);}
+  async function onCapture(item:File){setCaptureOpen(false);const selection=await selectFile(item);await runInspection(item,selection);}
   async function queueCurrent(){if(!file||!service.current)return;try{
     await service.current.enqueueInspection({file,roi,sourceType});await reloadQueue();setNotice('사진을 검사 대기열에 저장했습니다. 대기열 시작 버튼을 눌러 진행합니다.');
   }catch(e){fail(e,'대기열 등록 실패');}}
@@ -205,11 +232,24 @@ function App(){
           <button type="button" className="btn-ghost btn-sm" onClick={()=>setCaptureOpen(!captureOpen)}>{captureOpen?'촬영창 닫기':'카메라로 촬영'}</button></div>
           {captureOpen&&<CameraCapture disabled={busy||!isReady} onCapture={f=>void onCapture(f)}/>}
           <label className="file-drop"><span className="file-icon">＋</span><strong>{file?file.name:'검사할 사진을 선택하세요'}</strong><span>JPG · PNG · WEBP / 최대 40 MB</span>
-            <input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy||!isReady} onChange={e=>{selectFile(e.target.files?.[0]??null);e.currentTarget.value='';}}/></label>
-          {fileUrl&&!detail&&<RoiPicker imageUrl={fileUrl} roi={roi} onChange={setRoi} disabled={busy}/>}
-          <div className="actions"><button disabled={!isReady||!file||busy} onClick={()=>void runInspection()}>AI 검사 및 기록 저장</button>
-            <button className="btn-secondary" disabled={!isReady||!file||busy} onClick={()=>void queueCurrent()}>검사 대기열에 추가</button>
-            <button className="btn-ghost" disabled={busy} onClick={()=>{setFile(null);setDetail(null);setRoi(null);}}>선택 초기화</button></div>
+            <input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy||!isReady} onChange={e=>{void selectFile(e.target.files?.[0]??null);e.currentTarget.value='';}}/></label>
+          {fileUrl&&!detail&&<>
+            <RoiPicker imageUrl={fileUrl} roi={roi} onChange={value=>{manuallySelected.current=true;setRoi(value);}} disabled={busy}/>
+            <div className="auto-roi-panel">
+              <strong>너트 위치 자동 제안 {autoPending?'· 분석 중…':`· ${suggestions.length}개`}</strong>
+              <p className="muted small">단색 배경에서 물체 윤곽을 찾는 로컬 보조 기능입니다. 학습된 너트 탐지 AI가 아니며 너트 여부·정확도는 보장하지 않습니다. 사진을 확인하고 영역을 선택해 주세요.</p>
+              {suggestions.length>0&&<div className="roi-suggestion-list">{suggestions.map((suggestion,i)=><button key={`${i}-${suggestion.x}-${suggestion.y}`}
+                type="button" className="btn-ghost btn-sm" disabled={busy} onClick={()=>{
+                  manuallySelected.current=true;
+                  setRoi({x:suggestion.x,y:suggestion.y,width:suggestion.width,height:suggestion.height,rotationDegrees:0});
+                  setNotice(`제안 ${i+1}번 영역을 선택했습니다. 원본 사진 위의 ROI를 확인해 주세요.`);
+                }}>후보 {i+1} · {Math.round(suggestion.width)}×{Math.round(suggestion.height)}px</button>)}</div>}
+              {!suggestions.length&&!autoPending&&<span className="muted small">자동 제안 없음 · 수동 선택 또는 중앙 사전검사를 이용하세요.</span>}
+            </div>
+          </>}
+          <div className="actions"><button disabled={!isReady||!file||busy||autoPending} onClick={()=>void runInspection()}>AI 검사 및 기록 저장</button>
+            <button className="btn-secondary" disabled={!isReady||!file||busy||autoPending} onClick={()=>void queueCurrent()}>검사 대기열에 추가</button>
+            <button className="btn-ghost" disabled={busy} onClick={()=>{autoRequest.current++;setAutoPending(false);setSuggestions([]);setFile(null);setDetail(null);setRoi(null);}}>선택 초기화</button></div>
         </section>
         <section className="card"><div className="section-heading"><div><span className="section-kicker">STEP 02</span><h2>AI 분석 결과</h2><p>원본과 히트맵을 비교하고 최종 판단은 작업자가 별도로 기록합니다.</p></div>
           {activeInspection&&<span className="tag">{label(activeInspection.status)}</span>}</div>
