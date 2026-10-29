@@ -45,6 +45,7 @@ try{
     return img instanceof HTMLImageElement && img.complete && img.naturalWidth===320 &&
       !(panel?.textContent??'').includes('분석 중');
   },null,{timeout:15000});
+  await page.locator('.roi-stage').scrollIntoViewIfNeeded();
   const stage=await page.locator('.roi-stage').boundingBox();
   assert.ok(stage?.width>100,'ROI image should render');
   await page.mouse.move(stage.x+stage.width*0.08,stage.y+stage.height*0.08);
