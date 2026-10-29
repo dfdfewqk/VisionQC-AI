@@ -26,7 +26,8 @@ try{
   await page.locator('.file-drop input').setInputFiles({name:'synthetic-nut-smoke.png',mimeType:'image/png',buffer:Buffer.from(base64,'base64')});
   await page.getByRole('button',{name:'AI 검사 및 기록 저장'}).click();
   try{
-    await page.locator('.results-grid').waitFor({timeout:240_000});
+    await page.waitForFunction(() => !!document.querySelector('.results-grid') || (document.querySelector('.system-message')?.textContent ?? '').includes('검사 실패'),null,{timeout:180_000});
+    if(!await page.locator('.results-grid').count())throw new Error(await page.locator('.system-message').innerText());
     const score=await page.locator('.results-grid strong').first().innerText();
     assert.ok(!['확인 불가','실행되지 않음'].includes(score),`No valid inference score: ${score}`);
     const text=await page.locator('.system-message').innerText();
