@@ -1,0 +1,43 @@
+name: Website smoke (Chromium)
+on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - 'src/main.tsx'
+      - 'src/components/**'
+      - 'src/camera/**'
+      - 'src/styles/**'
+      - 'scripts/browser-smoke.mjs'
+      - '.github/workflows/browser-smoke.yml'
+  push:
+    branches: [develop]
+    paths:
+      - 'src/main.tsx'
+      - 'src/components/**'
+      - 'src/camera/**'
+      - 'src/styles/**'
+      - 'scripts/browser-smoke.mjs'
+permissions:
+  contents: read
+jobs:
+  chromium:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Install browser testing tools
+        run: |
+          npm install --no-save --package-lock=false playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: Serve Vite
+        run: |
+          npm run dev -- --host 127.0.0.1 > /tmp/visionqc-vite.log 2>&1 &
+          for i in $(seq 1 40); do curl -fsS http://127.0.0.1:5173/ >/dev/null && exit 0; sleep 1; done
+          cat /tmp/visionqc-vite.log
+          exit 1
+      - name: Browser smoke test
+        run: node scripts/browser-smoke.mjs
