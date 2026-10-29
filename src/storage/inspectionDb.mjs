@@ -1,9 +1,10 @@
 /** VisionQC v1 browser-local IndexedDB storage: shared originals, separate ROI inspections and overlays. */
 import {createInspectionSnapshot} from './inspectionModel.mjs';
 import {findMatchingSourceViews, summarizeInspectionViews, validateReinspection} from './inspectionLineage.mjs';
+import {LOT_STORE,PRODUCT_STORE,LINK_STORE,AUDIT_STORE} from './lotProductModel.mjs';
 
 export const DEFAULT_DB_NAME = 'visionqc-inspections-v1';
-export const DB_VERSION = 3; // additive human audit store; preserves all v1/v2 records
+export const DB_VERSION = 4; // additive LOT/product and identity audit stores; preserve v1-v3
 const SOURCE_STORE = 'sourceImages';
 const RECORD_STORE = 'inspections';
 const OVERLAY_STORE = 'heatmaps';
@@ -48,6 +49,20 @@ export function openInspectionDatabase({indexedDB = globalThis.indexedDB, name =
       if (!db.objectStoreNames.contains(REVIEW_STORE)) {
         const reviews = db.createObjectStore(REVIEW_STORE, {keyPath:'id'});
         reviews.createIndex('byInspection', 'inspectionId', {unique:false});
+      }
+      if (!db.objectStoreNames.contains(LOT_STORE)) {
+        const lots = db.createObjectStore(LOT_STORE, {keyPath:'key'});
+        lots.createIndex('bySourceCode', ['sourceType','code'], {unique:true});
+      }
+      if (!db.objectStoreNames.contains(PRODUCT_STORE)) {
+        const products = db.createObjectStore(PRODUCT_STORE, {keyPath:'key'});
+        products.createIndex('byLot', 'lotKey', {unique:false});
+        products.createIndex('byLotCode', ['lotKey','code'], {unique:true});
+      }
+      if (!db.objectStoreNames.contains(LINK_STORE)) db.createObjectStore(LINK_STORE, {keyPath:'inspectionId'});
+      if (!db.objectStoreNames.contains(AUDIT_STORE)) {
+        const audit = db.createObjectStore(AUDIT_STORE, {keyPath:'id'});
+        audit.createIndex('byEntity', ['entityType','entityKey'], {unique:false});
       }
     };
     request.onsuccess = () => {
@@ -150,7 +165,7 @@ export function createInspectionRepository({db, cryptoImpl = globalThis.crypto} 
     },
     async remove(id) {
       if (typeof id !== 'string' || !id) throw new TypeError('Inspection ID required');
-      const tx = db.transaction([RECORD_STORE,SOURCE_STORE,OVERLAY_STORE,REVIEW_STORE], 'readwrite');
+      const tx = db.transaction([RECORD_STORE,SOURCE_STORE,OVERLAY_STORE,REVIEW_STORE,LINK_STORE,AUDIT_STORE], 'readwrite');
       return txResult(tx, (done, fail) => {
         const records = tx.objectStore(RECORD_STORE);
         const get = records.get(id);
@@ -170,10 +185,18 @@ export function createInspectionRepository({db, cryptoImpl = globalThis.crypto} 
             const audit = reviewStore.index('byInspection').getAllKeys(id);
             audit.onsuccess = () => {
               for (const eventId of audit.result) reviewStore.delete(eventId);
-              records.delete(id);
-              tx.objectStore(OVERLAY_STORE).delete(id);
-              if (others.result.length === 1 && others.result[0].id === id) tx.objectStore(SOURCE_STORE).delete(record.sourceId);
-              done(true);
+              // Identity assignments and their revision events belong to this
+              // inspection. Explicit deletion clears them in the SAME transaction.
+              const identityStore = tx.objectStore(AUDIT_STORE);
+              const identityEvents = identityStore.index('byEntity').getAllKeys(['inspection', id]);
+              identityEvents.onsuccess = () => {
+                for (const eventId of identityEvents.result) identityStore.delete(eventId);
+                tx.objectStore(LINK_STORE).delete(id);
+                records.delete(id);
+                tx.objectStore(OVERLAY_STORE).delete(id);
+                if (others.result.length === 1 && others.result[0].id === id) tx.objectStore(SOURCE_STORE).delete(record.sourceId);
+                done(true);
+              };
             };
           };
         };
