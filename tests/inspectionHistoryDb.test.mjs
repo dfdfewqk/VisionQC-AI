@@ -54,7 +54,7 @@ test('deletion updates stats and search without leaving stale reviewed count',as
 });
 test('existing v3 database supports history without changing DB schema/version',async()=>{
   const {db,history,record}=await setup();await record('a');
-  assert.equal(DB_VERSION,3);assert.equal(db.version,3);
+  assert.equal(DB_VERSION,4);assert.equal(db.version,4);
   assert.equal((await history.search({inspectionId:'a'})).total,1);
   assert.equal(db.objectStoreNames.contains('inspectionHistory'),false);
   db.close();
