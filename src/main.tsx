@@ -234,7 +234,7 @@ function App(){
           <label className="file-drop"><span className="file-icon">＋</span><strong>{file?file.name:'검사할 사진을 선택하세요'}</strong><span>JPG · PNG · WEBP / 최대 40 MB</span>
             <input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy||!isReady} onChange={e=>{void selectFile(e.target.files?.[0]??null);e.currentTarget.value='';}}/></label>
           {fileUrl&&!detail&&<>
-            <RoiPicker imageUrl={fileUrl} roi={roi} onChange={value=>{manuallySelected.current=true;setRoi(value);}} disabled={busy}/>
+            <RoiPicker key={fileUrl} imageUrl={fileUrl} roi={roi} onChange={value=>{manuallySelected.current=true;setRoi(value);}} disabled={busy}/>
             <div className="auto-roi-panel">
               <strong>너트 위치 자동 제안 {autoPending?'· 분석 중…':`· ${suggestions.length}개`}</strong>
               <p className="muted small">단색 배경에서 물체 윤곽을 찾는 로컬 보조 기능입니다. 학습된 너트 탐지 AI가 아니며 너트 여부·정확도는 보장하지 않습니다. 사진을 확인하고 영역을 선택해 주세요.</p>
