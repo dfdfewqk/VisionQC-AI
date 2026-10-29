@@ -37,6 +37,14 @@ try{
   }),'base64');
   await file.setInputFiles({name:'smoke.png',mimeType:'image/png',buffer:png});
   await page.locator('.roi-stage').waitFor();
+  // Switching files keeps the ROI component mounted; wait for new bitmap and
+  // local foreground scan before sending pointer events to its image bounds.
+  await page.waitForFunction(()=>{
+    const img=document.querySelector('.roi-stage img');
+    const panel=document.querySelector('.auto-roi-panel');
+    return img instanceof HTMLImageElement && img.complete && img.naturalWidth===320 &&
+      !(panel?.textContent??'').includes('분석 중');
+  },null,{timeout:15000});
   const stage=await page.locator('.roi-stage').boundingBox();
   assert.ok(stage?.width>100,'ROI image should render');
   await page.mouse.move(stage.x+stage.width*0.08,stage.y+stage.height*0.08);
