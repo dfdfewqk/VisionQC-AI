@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import type { RoiSelection } from '../ai/patchcore';
 
 type Point = { x:number; y:number };
@@ -10,10 +10,6 @@ export default function RoiPicker({imageUrl, roi, onChange, disabled=false}:{
   const start = useRef<Point|null>(null);
   const [dimensions, setDimensions] = useState<Point|null>(null);
   const [drag, setDrag] = useState<{a:Point;b:Point}|null>(null);
-  useEffect(()=>{
-    // A new image must not inherit the old image's pixel-coordinate scale.
-    start.current=null;setDrag(null);setDimensions(null);
-  },[imageUrl]);
   const point = (ev: React.PointerEvent<HTMLDivElement>):Point => {
     const r=stage.current!.getBoundingClientRect();
     return {x:bound((ev.clientX-r.left)/r.width,1),y:bound((ev.clientY-r.top)/r.height,1)};
